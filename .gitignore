@@ -1,4 +1,17 @@
+# Secrets — never commit
 .env
+.env.*.local
+
+# Python
 .venv/
 __pycache__/
 *.pyc
+
+# Runtime artifacts
+*.log
+voiceos-app.log
+VoiceOS.app.DISABLED/
+VoiceOS.app/
+
+# macOS
+.DS_Store

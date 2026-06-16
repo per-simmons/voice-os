@@ -1,47 +1,40 @@
 #!/usr/bin/env python3
 """
-overlay.py — a cool black & white waveform HUD that appears at the top of the
-screen while you're talking to chat. Frameless, always-on-top, click-through-ish
-(no focus steal). Driven by /tmp/voiceos-hud.json which voice_agent.py writes
-({active, level}). Fades in while the mic is going to chat, fades out otherwise.
+overlay.py — native click-through waveform HUD (black & white) at the top of the
+screen while you talk to chat.
 
-Run alongside the agent (run.sh does this for you), or standalone:
-    python overlay.py
+Uses a borderless, transparent, always-on-top NSWindow with
+setIgnoresMouseEvents_(True), so it physically CANNOT intercept clicks or steal
+focus (the earlier tkinter version did — this one can't). Reads
+/tmp/voiceos-hud.json ({active, level}) which voice_agent.py writes.
+
+Run:  python overlay.py        (needs pyobjc-framework-Cocoa)
 """
 import json
-import tkinter as tk
+import math
+
+import objc
+from AppKit import (
+    NSApplication,
+    NSApplicationActivationPolicyAccessory,
+    NSBackingStoreBuffered,
+    NSBezierPath,
+    NSColor,
+    NSScreen,
+    NSScreenSaverWindowLevel,
+    NSTimer,
+    NSView,
+    NSWindow,
+    NSWindowCollectionBehaviorCanJoinAllSpaces,
+    NSWindowCollectionBehaviorIgnoresCycle,
+    NSWindowCollectionBehaviorStationary,
+    NSWindowStyleMaskBorderless,
+)
+from Foundation import NSMakeRect
 
 HUD_FILE = "/tmp/voiceos-hud.json"
-W, H = 760, 96
+W, H = 760, 110
 BARS = 60
-BG = "#000000"
-FG = "#ffffff"
-DIM = "#3a3a3a"
-
-root = tk.Tk()
-root.overrideredirect(True)
-root.attributes("-topmost", True)
-try:
-    root.attributes("-alpha", 0.0)  # start hidden
-except tk.TclError:
-    pass
-sw = root.winfo_screenwidth()
-root.geometry(f"{W}x{H}+{(sw - W) // 2}+24")
-cv = tk.Canvas(root, width=W, height=H, bg=BG, highlightthickness=0)
-cv.pack()
-
-levels = [0.0] * BARS
-disp = 0.0
-cur_alpha = 0.0
-pulse = 0.0
-
-
-def round_rect(c, x1, y1, x2, y2, r, **kw):
-    pts = [
-        x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
-        x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1,
-    ]
-    return c.create_polygon(pts, smooth=True, **kw)
 
 
 def read_hud():
@@ -53,50 +46,137 @@ def read_hud():
         return False, 0.0
 
 
-def tick():
-    global disp, cur_alpha, pulse
-    active, level = read_hud()
+class WaveView(NSView):
+    def initWithFrame_(self, frame):
+        self = objc.super(WaveView, self).initWithFrame_(frame)
+        if self is None:
+            return None
+        self.levels = [0.0] * BARS
+        self.disp = 0.0
+        self.alpha = 0.0
+        self.pulse = 0.0
+        return self
 
-    # smooth target alpha (fade in/out)
-    target_alpha = 0.94 if active else 0.0
-    cur_alpha += (target_alpha - cur_alpha) * 0.25
-    try:
-        root.attributes("-alpha", max(0.0, min(0.94, cur_alpha)))
-    except tk.TclError:
-        pass
+    def isFlipped(self):
+        return False
 
-    disp += (level - disp) * 0.35
-    levels.append(disp if active else 0.0)
-    del levels[0]
-    pulse = (pulse + 0.12) % 6.2831853
+    def drawRect_(self, rect):
+        active, level = read_hud()
+        target = 0.94 if active else 0.0
+        self.alpha += (target - self.alpha) * 0.25
+        self.disp += (level - self.disp) * 0.35
+        self.levels.append(self.disp if active else 0.0)
+        del self.levels[0]
+        self.pulse = (self.pulse + 0.12) % (2 * math.pi)
 
-    cv.delete("all")
-    if cur_alpha > 0.02:
-        round_rect(cv, 2, 2, W - 2, H - 2, 26, fill="#0b0b0b", outline="#222222")
-        cx = W / 2
-        cy = H / 2
-        bw = (W - 150) / BARS
-        x0 = 120
-        for i, lv in enumerate(levels):
-            # envelope: taller toward the center, tapered at the edges
+        b = self.bounds()
+        NSColor.clearColor().set()
+        NSBezierPath.fillRect_(b)
+        if self.alpha <= 0.02:
+            return
+
+        a = self.alpha
+        # rounded dark container
+        bg = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            NSMakeRect(2, 2, b.size.width - 4, b.size.height - 4), 26, 26
+        )
+        NSColor.colorWithCalibratedWhite_alpha_(0.04, 0.9 * a).set()
+        bg.fill()
+        NSColor.colorWithCalibratedWhite_alpha_(0.18, a).set()
+        bg.setLineWidth_(1.0)
+        bg.stroke()
+
+        cy = b.size.height / 2
+        x0 = 116
+        span = b.size.width - x0 - 30
+        bw = span / BARS
+        for i, lv in enumerate(self.levels):
             env = 0.30 + 0.70 * (1 - abs(i - BARS / 2) / (BARS / 2))
-            h = max(3, lv * env * (H * 0.62))
+            h = max(3, lv * env * (b.size.height * 0.60))
             x = x0 + i * bw + bw * 0.5
-            shade = FG if lv > 0.04 else DIM
-            cv.create_line(
-                x, cy - h / 2, x, cy + h / 2,
-                fill=shade, width=max(2, int(bw * 0.55)), capstyle="round",
-            )
-        # left: pulsing dot + label
-        import math
-        glow = 0.5 + 0.5 * math.sin(pulse)
+            white = 1.0 if lv > 0.04 else 0.30
+            NSColor.colorWithCalibratedWhite_alpha_(white, a).set()
+            bar = NSBezierPath.bezierPath()
+            bar.setLineWidth_(max(2.0, bw * 0.55))
+            bar.setLineCapStyle_(1)  # round
+            bar.moveToPoint_((x, cy - h / 2))
+            bar.lineToPoint_((x, cy + h / 2))
+            bar.stroke()
+
+        # pulsing dot + "chat" label
+        glow = 0.5 + 0.5 * math.sin(self.pulse)
         rr = 5 + 2 * glow
-        cv.create_oval(40 - rr, cy - rr, 40 + rr, cy + rr, fill=FG, outline="")
-        cv.create_text(60, cy, text="chat", fill=FG, anchor="w",
-                       font=("Helvetica Neue", 16, "bold"))
+        NSColor.colorWithCalibratedWhite_alpha_(1.0, a).set()
+        dot = NSBezierPath.bezierPathWithOvalInRect_(
+            NSMakeRect(40 - rr, cy - rr, 2 * rr, 2 * rr)
+        )
+        dot.fill()
+        self._draw_label("chat", 60, cy, a)
 
-    root.after(30, tick)
+    def _draw_label(self, text, x, cy, a):
+        from AppKit import (
+            NSFont,
+            NSColor as C,
+            NSFontAttributeName,
+            NSForegroundColorAttributeName,
+        )
+        from Foundation import NSString
+        attrs = {
+            NSFontAttributeName: NSFont.boldSystemFontOfSize_(16),
+            NSForegroundColorAttributeName: C.colorWithCalibratedWhite_alpha_(1.0, a),
+        }
+        NSString.stringWithString_(text).drawAtPoint_withAttributes_((x, cy - 11), attrs)
 
 
-root.after(60, tick)
-root.mainloop()
+class Controller(objc.lookUpClass("NSObject")):
+    def tick_(self, timer):
+        self.view.setNeedsDisplay_(True)
+
+
+def main():
+    import os
+
+    app = NSApplication.sharedApplication()
+    app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+
+    # Pick which monitor to show the waveform on. VOICEOS_DISPLAY is 1-based
+    # (1 = primary, 2 = second monitor). Defaults to display 2 if it exists.
+    screens = NSScreen.screens()
+    want = int(os.environ.get("VOICEOS_DISPLAY", "2"))
+    idx = want - 1
+    if idx < 0 or idx >= len(screens):
+        idx = len(screens) - 1  # fall back to the last available screen
+    fr = screens[idx].frame()
+    x = fr.origin.x + (fr.size.width - W) / 2
+    y = fr.origin.y + fr.size.height - H - 24  # top of THAT screen
+    rect = NSMakeRect(x, y, W, H)
+
+    win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+        rect, NSWindowStyleMaskBorderless, NSBackingStoreBuffered, False
+    )
+    win.setOpaque_(False)
+    win.setBackgroundColor_(NSColor.clearColor())
+    win.setLevel_(NSScreenSaverWindowLevel)
+    win.setIgnoresMouseEvents_(True)   # <-- click-through: can't steal clicks/focus
+    win.setCollectionBehavior_(
+        NSWindowCollectionBehaviorCanJoinAllSpaces
+        | NSWindowCollectionBehaviorStationary
+        | NSWindowCollectionBehaviorIgnoresCycle
+    )
+    win.setHasShadow_(False)
+
+    view = WaveView.alloc().initWithFrame_(NSMakeRect(0, 0, W, H))
+    win.setContentView_(view)
+    win.orderFrontRegardless()
+
+    ctrl = Controller.alloc().init()
+    ctrl.view = view
+    NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+        1.0 / 30, ctrl, "tick:", None, True
+    )
+
+    app.run()
+
+
+if __name__ == "__main__":
+    main()

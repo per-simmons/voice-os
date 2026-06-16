@@ -130,6 +130,64 @@ at the app, find the right buttons, and write the tool for you.
 
 ---
 
+## Case study: a *hard* app (Adobe Premiere Pro)
+
+Some apps — Adobe's especially — draw their own custom UI and publish **almost
+nothing** to the accessibility tree. Snapshot Premiere and you get basically an
+empty tree:
+
+```bash
+agent-desktop find --app "Adobe Premiere Pro 2025" --role button --count   # → 0
+```
+
+Zero buttons. So "snapshot the tree, click the Play button" is **impossible** here.
+When you hit this, fall back to the app's **native keyboard shortcuts** — space =
+play/pause, ←/→ = step a frame, ⌘K = razor cut at the playhead, etc.
+
+But there's a gotcha that makes naive keyboard sending flaky, and it's worth
+knowing because it bites every Adobe app:
+
+> **Transport keys only land when the right panel has keyboard focus.**
+> Bringing Premiere to the front with `activate` is *not* enough — if the Project
+> bin or an effect field had focus, the spacebar goes nowhere. That's the classic
+> "it pauses sometimes and not others." (Premiere also reports **0 windows to
+> System Events**, so you can't even enumerate its panels that way.)
+
+**The fix (what `premiere_control` does):**
+
+1. `activate` Premiere.
+2. **Click the Program Monitor's video area to force a transport panel into
+   focus.** Clicking the *image* is side-effect-free — no playhead move, no button
+   toggle. Get the window rectangle from CoreGraphics (`Quartz.CGWindowListCopyWindowInfo`,
+   which *does* see Premiere's windows even though System Events doesn't), then
+   click ~72% across / ~30% down (upper-right ≈ Program Monitor in the default
+   layout; tune with `PREMIERE_FOCUS_X` / `PREMIERE_FOCUS_Y`).
+3. Send the key with `agent-desktop press --app "<proc>" <combo>` — a real CGEvent,
+   steadier than `osascript ... keystroke` (which can silently no-op if the
+   controlling process lacks Accessibility).
+
+Adding a new Premiere command is then **one line** — drop it in the `_PREMIERE_KEYS`
+map in `actions.py`:
+
+```python
+_PREMIERE_KEYS = {
+    "cut": "cmd+k",            # razor / add edit at the playhead
+    "undo": "cmd+z", "redo": "cmd+shift+z", "save": "cmd+s",
+    "mark_in": "i", "mark_out": "o", "add_marker": "m",
+    "ripple_delete": "shift+delete", "zoom_in": "shift+equal", "zoom_out": "minus",
+    # add yours here ↓
+}
+```
+
+Then add the action name to the `enum` in `voice_agent.py`. Say **"cut"** and it
+razors at the playhead.
+
+**Takeaway for any hard app:** if the AX tree is empty, switch to keyboard
+shortcuts, and remember that keyboard input needs the *correct inner panel*
+focused — a single safe focus-click usually fixes the "works sometimes" problem.
+
+---
+
 ## Tips
 - **Naming:** keep tool names short and verb-y (`open_app`, `play_music`). The
   model matches your spoken intent to the tool `description`, so write clear
