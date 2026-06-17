@@ -27,7 +27,8 @@ from pathlib import Path
 
 from session_log import SessionLog
 
-_MEMORY_DIR = Path(__file__).parent / "memory"
+# src/ lives one level under the project root; memory/ sits at the root.
+_MEMORY_DIR = Path(__file__).resolve().parent.parent / "memory"
 _USER_CAPS_PATH = _MEMORY_DIR / "capabilities.user.json"
 _BUILTIN_CAPS_PATH = _MEMORY_DIR / "capabilities.json"
 
@@ -335,8 +336,8 @@ if __name__ == "__main__":
     import argparse
     from pathlib import Path as _Path
 
-    # load .env if present
-    env_path = _Path(__file__).parent / ".env"
+    # load .env if present (.env lives at the project root, one level above src/)
+    env_path = _Path(__file__).resolve().parent.parent / ".env"
     if env_path.exists():
         for line in env_path.read_text().splitlines():
             line = line.strip()

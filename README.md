@@ -11,7 +11,7 @@ point you can clone and extend. **It learns your workflows over time.**
 
 > Built for the "run your entire computer with your voice" video. Clone it, hand
 > it to your coding agent, and say _"build this out for me."_
-> See **[ADD-AN-APP.md](ADD-AN-APP.md)**.
+> See **[docs/ADD-AN-APP.md](docs/ADD-AN-APP.md)**.
 
 ---
 
@@ -38,13 +38,21 @@ Then talk: _"open Spotify," "play some jazz," "cut here," "what's on my screen?"
 
 ## Ways to talk to it
 
-| Mode                           | Command            | Notes                                             |
-| ------------------------------ | ------------------ | ------------------------------------------------- |
-| **Push-to-talk** (recommended) | `./run.sh`         | Press ENTER, talk. 100% reliable, $0 idle.        |
-| **Hold-to-talk hotkey**        | `./ptt.sh`         | Hold **Right Control** anywhere to talk.          |
-| **Wake word "hey chat"**       | `./run.sh --local` | Local on-device wake word. Great in a quiet room. |
+| Mode                           | Command                          | Idle cost | Notes                                                                                       |
+| ------------------------------ | -------------------------------- | --------- | ------------------------------------------------------------------------------------------- |
+| **Push-to-talk** (default)     | `./run.sh`                       | **$0**    | Press ENTER, talk. Nothing is sent until you press ENTER.                                   |
+| **Local wake word**            | `./run.sh --local`               | **$0**    | On-device [OpenWakeWord](https://github.com/dscripka/openWakeWord) (`hey jarvis`) + local Whisper. The cloud is only called once the wake word fires. |
+| **Hold-to-talk hotkey**        | `./ptt.sh` / `./run.sh --hotkey` | **$0**    | Hold **Right Control** (or your hotkey) anywhere to talk.                                    |
+| **Cloud wake word "hey chat"** | `./run.sh --wake`                | not $0    | Hands-free, but streams + transcribes audio **continuously**, so it bills while idle.       |
 
 Pick a specific mic with `VOICEOS_MIC=Scarlett ./ptt.sh`.
+
+> **Want hands-free without the idle cost?** Use `--local`. The wake word and
+> transcription run entirely on your Mac (free); only an actual command reaches
+> the cloud. Note the local wake word is `hey jarvis` (an OpenWakeWord built-in) —
+> `hey chat` is only available in the cloud `--wake` mode unless you train a
+> custom OpenWakeWord model. Pick a bigger local Whisper for accuracy with
+> `VOICEOS_WHISPER=small.en` (or `distil-large-v3`).
 
 ---
 
@@ -117,14 +125,21 @@ embedding cache auto-regenerates. No Python needed.
 At the end of every session (Ctrl-C), the system runs a retrospective:
 
 ```bash
-python retrospective.py              # reflect on the last session
-python retrospective.py --sessions 3 # reflect on the last 3 sessions
+python src/retrospective.py              # reflect on the last session
+python src/retrospective.py --sessions 3 # reflect on the last 3 sessions
 ```
 
-It reads the structured session log, identifies patterns in what worked, and
-appends new capability entries to `memory/capabilities.user.json`. Next startup,
-those entries are embedded and retrievable. The OS learns your specific workflow
-without you having to write any code.
+It reads the structured session log, pairing **what you actually said** with the
+tool that ran, and does one of two things per command:
+
+1. **Adds your phrasing to an existing capability** (the common case) — so the
+   exact way _you_ ask for something matches instantly next time, while the
+   original template and examples are preserved.
+2. **Creates a new capability** only when the action is genuinely new.
+
+The result is written to `memory/capabilities.user.json` and re-embedded next
+startup. The OS tunes itself to your specific vocabulary without you writing any
+code.
 
 ---
 
@@ -149,6 +164,10 @@ All tuneable values live in `.env` (copy `.env.example` to get started):
 | Variable                      | Default              | Description                                               |
 | ----------------------------- | -------------------- | --------------------------------------------------------- |
 | `OPENAI_API_KEY`              | —                    | Required. Realtime-capable key.                           |
+| `VOICEOS_TRANSCRIBE_MODEL`    | `gpt-4o-transcribe`  | Cloud STT for push-to-talk/hotkey/`--wake`. Bigger = more accurate (`gpt-4o-mini-transcribe`, `whisper-1`). |
+| `VOICEOS_WHISPER`             | `small.en`           | **Local** STT size for `--local` mode (`tiny.en`…`distil-large-v3`). Runs on-device, $0 idle. |
+| `VOICEOS_OWW_MODEL`           | `hey_jarvis`         | Local wake word for `--local` (`hey_jarvis`/`hey_mycroft`/`alexa`, or a custom model path). |
+| `VOICEOS_OWW_THRESHOLD`       | `0.5`                | Local wake sensitivity: lower = more sensitive.           |
 | `VOICEOS_BROWSER`             | `Safari`             | Browser for web searches.                                 |
 | `VOICEOS_USER_NAME`           | `the user`           | Your name in the system prompt.                           |
 | `VOICEOS_USER_HINTS`          | —                    | Free-text hints e.g. accent, preferences.                 |
@@ -163,7 +182,12 @@ All tuneable values live in `.env` (copy `.env.example` to get started):
 ## Cost & privacy
 
 - **Cost:** `gpt-realtime-2` is ~$32/$64 per 1M audio tokens — roughly **a few
-  cents per command**. Push-to-talk and local wake word are **$0 idle**.
+  cents per command**. Push-to-talk, hotkey, and `--local` are **$0 idle**
+  (audio only leaves your Mac for an actual command). The cloud wake word
+  (`--wake`) transcribes continuously, so it bills while idle — use `--local`
+  for hands-free without that cost.
+- **Local wake + STT:** `--local` runs OpenWakeWord and faster-whisper on-device.
+  Wake detection is ~free CPU; Whisper only runs per-command. No idle API cost.
 - **Retrieval:** runs fully locally via `sentence-transformers`. No API calls, no
   cost, works offline.
 - **Privacy:** mic audio is sent to OpenAI only during an active command. Session
@@ -171,20 +195,44 @@ All tuneable values live in `.env` (copy `.env.example` to get started):
 
 ---
 
-## Files
+## Project layout
 
-| File                            | Role                                                 |
-| ------------------------------- | ---------------------------------------------------- |
-| `voice_agent.py`                | Realtime loop — mic ↔ model ↔ tools, all input modes |
-| `actions.py`                    | The 5 primitive tools the model calls                |
-| `retrieval.py`                  | Local capability embedding index and cosine search   |
-| `session_log.py`                | Structured per-session JSONL event logger            |
-| `retrospective.py`              | Post-session dreaming loop — learns new capabilities |
-| `wake_listener.py`              | Local ($0-idle) wake-word variant                    |
-| `config.py`                     | All tuneable constants, read from env                |
-| `overlay.py`                    | Waveform HUD                                         |
-| `memory/capabilities.json`      | Shipped capability templates                         |
-| `memory/capabilities.user.json` | Your learned capabilities (gitignored)               |
-| `memory/sessions/`              | Session logs (gitignored)                            |
+```
+voice-os/
+├── run.sh  ptt.sh  start.sh        entrypoints (run these)
+├── requirements*.txt  .env.example
+├── src/                            application code
+│   ├── voice_agent.py              realtime loop — mic ↔ model ↔ tools (cloud modes)
+│   ├── wake_listener.py            local ($0-idle) wake-word engine: OpenWakeWord + faster-whisper
+│   ├── actions.py                  the 5 primitive tools the model calls
+│   ├── retrieval.py                local capability embedding index + cosine search
+│   ├── retrospective.py            post-session dreaming loop — learns your phrasings
+│   ├── session_log.py              structured per-session JSONL event logger
+│   ├── config.py                   all tuneable constants, read from env
+│   ├── voice_app.py                safe global-hotkey front-end (Carbon RegisterEventHotKey)
+│   ├── ax_keeper.py                keeps Claude Desktop's accessibility tree on
+│   └── overlay.py                  waveform HUD
+├── tests/                          pytest suite (see "Testing" below)
+├── docs/                           ADD-AN-APP.md and friends
+└── memory/
+    ├── capabilities.json           shipped capability templates
+    ├── capabilities.user.json      your learned capabilities (gitignored)
+    └── sessions/                   session logs (gitignored)
+```
+
+## Testing
+
+```bash
+pip install -r requirements-dev.txt   # pytest
+pytest                                # runs tests/
+```
+
+- `tests/test_retrieval.py` — asserts spoken **paraphrases** resolve to the right
+  capability template (and that off-topic chatter stays low-confidence). Needs
+  the local embedding model.
+- `tests/test_retrospective.py` — the dreaming loop's learning logic (pairing
+  phrasings with tools, the merge that grows existing templates). Pure, no network.
+- `tests/test_loop.py` — optional live end-to-end check against the Realtime API
+  (needs `OPENAI_API_KEY`): `python tests/test_loop.py "open Spotify"`.
 
 License: MIT. Have fun — go tell your agent to build it out.

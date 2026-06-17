@@ -69,9 +69,13 @@ OWW_THRESHOLD: float = float(os.environ.get("VOICEOS_OWW_THRESHOLD", "0.5"))
 OWW_FRAME_MS: int = 80
 OWW_FRAME: int = CAP_RATE * OWW_FRAME_MS // 1_000  # 1 280 samples
 
-# Whisper model size for command transcription (after OWW fires).
-# Options: tiny.en, base.en, small.en  — base.en is the default sweet-spot.
-WHISPER_SIZE: str = os.environ.get("VOICEOS_WHISPER", "base.en")
+# Local Whisper (faster-whisper) model for command transcription AFTER the wake
+# word fires. This runs on-device and is only invoked per-command, so a bigger,
+# more accurate model costs CPU briefly but NOTHING at idle — pick a bigger one
+# if commands get mistranscribed. Roughly smallest→best:
+#   tiny.en  base.en  small.en  medium.en  distil-large-v3  large-v3
+# small.en is a good accuracy/speed default on Apple Silicon (int8).
+WHISPER_SIZE: str = os.environ.get("VOICEOS_WHISPER", "small.en")
 
 # ---------------------------------------------------------------------------
 # Microphone selection

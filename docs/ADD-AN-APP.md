@@ -7,6 +7,9 @@ app we didn't pre-build. You're going to add a **tool**. It's ~15 lines, and you
 can even have your coding agent (Claude Code / Cursor) do it for you using the
 steps below.
 
+> The Python modules referenced below (`actions.py`, `voice_agent.py`, …) live in
+> the **`src/`** directory.
+
 ---
 
 ## First, the one idea that makes this possible: the accessibility tree
@@ -197,4 +200,4 @@ focused — a single safe focus-click usually fixes the "works sometimes" proble
 - **Permissions:** agent-desktop needs **Accessibility** permission (System
   Settings → Privacy & Security → Accessibility). Grant it once.
 - **Test a tool without voice:** every tool runs standalone —
-  `python actions.py play_apple_music "miles davis"`.
+  `python src/actions.py play_apple_music "miles davis"`.

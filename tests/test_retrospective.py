@@ -12,8 +12,12 @@ to an existing template or mints a brand-new capability.
 from __future__ import annotations
 
 import json
+import os
+import sys
 
-import retrospective as r
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+import retrospective as r  # noqa: E402
 
 
 # --- wake-word stripping --------------------------------------------------

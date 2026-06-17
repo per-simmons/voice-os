@@ -14,7 +14,12 @@ Needs the local embedding model (sentence-transformers, cached after first run).
 """
 from __future__ import annotations
 
-import pytest
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+import pytest  # noqa: E402
 
 pytest.importorskip("sentence_transformers")
 

@@ -27,11 +27,12 @@ import numpy as np
 
 import config
 
-_HERE = Path(__file__).parent
-_CAPABILITIES_PATH = _HERE / "memory" / "capabilities.json"
-_USER_CAPABILITIES_PATH = _HERE / "memory" / "capabilities.user.json"
-_EMBED_CACHE = _HERE / "memory" / "embeddings.npy"
-_EMBED_IDS_CACHE = _HERE / "memory" / "embedding_ids.json"
+# src/ lives one level under the project root; memory/ sits at the root.
+_ROOT = Path(__file__).resolve().parent.parent
+_CAPABILITIES_PATH = _ROOT / "memory" / "capabilities.json"
+_USER_CAPABILITIES_PATH = _ROOT / "memory" / "capabilities.user.json"
+_EMBED_CACHE = _ROOT / "memory" / "embeddings.npy"
+_EMBED_IDS_CACHE = _ROOT / "memory" / "embedding_ids.json"
 
 _MODEL_NAME = os.environ.get("VOICEOS_EMBED_MODEL", "all-MiniLM-L6-v2")
 

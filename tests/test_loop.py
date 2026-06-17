@@ -19,10 +19,12 @@ import json
 import os
 import sys
 
-import websockets
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-import actions
-from voice_agent import MODEL, URL, TOOLS, INSTRUCTIONS, dispatch_tool
+import websockets  # noqa: E402
+
+import actions  # noqa: E402
+from voice_agent import MODEL, URL, TOOLS, INSTRUCTIONS, dispatch_tool  # noqa: E402
 
 
 async def run(user_text: str):

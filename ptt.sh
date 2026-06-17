@@ -6,4 +6,4 @@ set -euo pipefail
 cd "$(dirname "$0")"
 source .venv/bin/activate
 set -a; source .env; set +a
-exec python voice_agent.py --hotkey right_ctrl ${VOICEOS_MIC:+--mic "$VOICEOS_MIC"}
+exec python src/voice_agent.py --hotkey right_ctrl ${VOICEOS_MIC:+--mic "$VOICEOS_MIC"}

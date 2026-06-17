@@ -20,7 +20,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-_SESSIONS_DIR = Path(__file__).parent / "memory" / "sessions"
+# src/ lives one level under the project root; memory/ sits at the root.
+_SESSIONS_DIR = Path(__file__).resolve().parent.parent / "memory" / "sessions"
 
 
 class SessionLog:

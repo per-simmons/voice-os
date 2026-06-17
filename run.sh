@@ -3,9 +3,10 @@
 # Idempotent: safe to run every time. Downloads everything needed on first run.
 #
 # Modes:
-#   ./run.sh              push-to-talk (press ENTER to talk)
-#   ./run.sh --local      local wake-word engine ($0 idle)
-#   ./run.sh --hotkey     hold-to-talk global hotkey
+#   ./run.sh              push-to-talk: press ENTER to talk        ($0 idle)
+#   ./run.sh --local      local on-device wake word (OpenWakeWord) ($0 idle)
+#   ./run.sh --hotkey     hold a global hotkey to talk             ($0 idle)
+#   ./run.sh --wake       cloud wake word "hey chat"   (streams continuously — NOT $0 idle)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -109,21 +110,32 @@ ok "models ready"
 # ── 6. Launch ────────────────────────────────────────────────────────────────
 echo ""
 
-# Filter --local out of args for the Python process
+# Strip launcher-only flags before handing the rest to Python.
 FILTERED_ARGS=()
 for arg in "$@"; do
-  [[ "$arg" != "--local" ]] && FILTERED_ARGS+=("$arg")
+  case "$arg" in
+    --local|--wake) ;;                       # consumed here, not by the Python process
+    *) FILTERED_ARGS+=("$arg") ;;
+  esac
 done
 
 if [[ " $* " == *" --local "* ]]; then
-  step "launching with local wake-word engine (\$0 idle)"
-  echo -e "   Say ${BOLD}\"hey chat, …\"${RESET} to trigger a command."
+  OWW=${VOICEOS_OWW_MODEL:-hey_jarvis}
+  step "launching local wake-word engine (\$0 idle — nothing leaves your Mac until you speak the wake word)"
+  echo -e "   Say ${BOLD}\"${OWW//_/ }, …\"${RESET} to trigger a command (set VOICEOS_OWW_MODEL to change)."
   echo ""
-  python wake_listener.py "${FILTERED_ARGS[@]+${FILTERED_ARGS[@]}}"
+  python src/wake_listener.py "${FILTERED_ARGS[@]+${FILTERED_ARGS[@]}}"
+elif [[ " $* " == *" --wake "* ]]; then
+  step "launching cloud wake word — streams audio continuously (NOT \$0 idle)"
+  echo -e "   Say ${BOLD}\"hey chat, …\"${RESET}. For \$0 idle use ${BOLD}--local${RESET} instead."
+  echo ""
+  python src/voice_agent.py "${FILTERED_ARGS[@]+${FILTERED_ARGS[@]}}"
+elif [[ " $* " == *" --hotkey "* ]]; then
+  step "launching hold-to-talk hotkey (\$0 idle)"
+  echo ""
+  python src/voice_agent.py "${FILTERED_ARGS[@]+${FILTERED_ARGS[@]}}"
 else
-  MODE="push-to-talk (press ENTER to talk)"
-  [[ " $* " == *" --hotkey "* ]] && MODE="hold-to-talk hotkey"
-  step "launching voice agent — ${MODE}"
+  step "launching push-to-talk — press ENTER to talk (\$0 idle)"
   echo ""
-  python voice_agent.py "$@"
+  python src/voice_agent.py --push-to-talk "${FILTERED_ARGS[@]+${FILTERED_ARGS[@]}}"
 fi
