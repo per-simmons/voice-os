@@ -166,18 +166,33 @@ def play_music(query: str = "") -> dict:
     }
 
 
+def _sh_squote(s: str) -> str:
+    """Quote `s` as ONE shell argument with no shell interpretation — neutralizes
+    $(...), backticks, $VARS, ;, &&, etc. Standard POSIX single-quote escaping:
+    close-quote, backslash-escaped quote, reopen."""
+    return "'" + (s or "").replace("'", "'\\''") + "'"
+
+
 def run_terminal(prompt: str) -> dict:
     """
     Open Terminal and start a Claude Code session with `prompt` as the request.
     Used for the 'ask Claude to write me a better intro' beat. Types the command
     and presses Return so it runs live on camera.
+
+    SECURITY: `prompt` is model-supplied and may carry text the model read from a
+    web page or the screen (indirect prompt injection). We pass it to `claude` as a
+    single, strictly single-quoted shell argument so shell metacharacters can't
+    execute, then escape that whole command for the AppleScript string literal so it
+    can't terminate the string early and inject AppleScript.
     """
-    safe = prompt.replace('"', '\\"')
-    # Open Terminal with a new window already cd'd to home, then run claude.
+    shell_cmd = f"claude {_sh_squote(prompt)}"
+    # escape for the AppleScript "..." literal — backslash FIRST, then quote/newlines
+    as_lit = (shell_cmd.replace("\\", "\\\\").replace('"', '\\"')
+              .replace("\n", "\\n").replace("\r", "\\r"))
     script = f'''
     tell application "Terminal"
         activate
-        do script "claude \\"{safe}\\""
+        do script "{as_lit}"
     end tell
     '''
     p = _osa(script)
