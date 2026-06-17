@@ -386,11 +386,30 @@ def _spk_cb(outdata, frames, t, status):
         _primed = False
 
 
+def _drain_play_queue() -> None:
+    """Discard all queued playback audio (used on barge-in and speech-start)."""
+    while not play_q.empty():
+        try:
+            play_q.get_nowait()
+        except queue.Empty:
+            break
+    _play_buf.clear()
+
+
+def _drain_mic_queue() -> None:
+    """Discard stale mic frames (used after a reconnect)."""
+    while not mic_q.empty():
+        try:
+            mic_q.get_nowait()
+        except queue.Empty:
+            break
+
+
 async def dispatch_tool(name: str, args: dict) -> dict:
     fn = actions.TOOLS.get(name)
     if not fn:
         return {"status": "error", "error": f"unknown tool {name}"}
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(None, lambda: fn(**args))
     except Exception as e:  # noqa: BLE001
@@ -398,16 +417,12 @@ async def dispatch_tool(name: str, args: dict) -> dict:
 
 
 async def mic_pump(ws):
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     while True:
         data = await loop.run_in_executor(None, mic_q.get)
-        # publish level + state for the waveform overlay (active only when the
-        # mic is actually going to chat)
         active = _listening and not _speaking and not _play_buf
         _write_hud(active, _frame_level(data) if active else 0.0)
-        # don't forward the mic while the model is speaking / draining (anti-echo),
-        # and in PTT mode only after Enter.
-        if not _listening or _speaking or _play_buf:
+        if not active:
             continue
         await ws.send(
             json.dumps(
@@ -421,7 +436,7 @@ async def mic_pump(ws):
 
 async def ptt_console(ws):
     global _listening
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     while True:
         await loop.run_in_executor(None, sys.stdin.readline)
         if _speaking or _play_buf:
@@ -432,7 +447,6 @@ async def ptt_console(ws):
 
 
 # global hotkey (hold-to-talk anywhere) -------------------------------------
-_HOTKEY_MAP = {}  # filled lazily so pynput import isn't required in other modes
 key_events: "queue.Queue[str]" = queue.Queue()
 
 
@@ -447,21 +461,14 @@ async def hotkey_console(ws):
     """Hold the global key to talk; release to send. Manual buffer commit.
     Pressing the key WHILE the model is talking interrupts it (barge-in)."""
     global _listening, _speaking
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     while True:
         ev = await loop.run_in_executor(None, key_events.get)
         global _t_release
         if ev == "down":
             if _speaking or _play_buf:
-                # BARGE-IN: stop the model talking, then start listening so you
-                # can cut it off with "got it" / your next command.
                 await ws.send(json.dumps({"type": "response.cancel"}))
-                _play_buf.clear()
-                while not play_q.empty():
-                    try:
-                        play_q.get_nowait()
-                    except queue.Empty:
-                        break
+                _drain_play_queue()
                 _speaking = False
                 print("⏹  interrupted", flush=True)
             t0 = time.monotonic()
@@ -482,87 +489,75 @@ async def hotkey_console(ws):
             print("⏳ thinking…", flush=True)
 
 
+async def _handle_transcription(ws, ev: dict) -> None:
+    heard = (ev.get("transcript") or "").strip()
+    if WAKE_MODE:
+        if is_wake(heard):
+            print(f"\n🗣  HEARD (wake ✓): {heard!r}", flush=True)
+            _log(f"WAKE {heard!r}")
+            await ws.send(_EVT_RESPONSE_CREATE)
+        else:
+            print(f"\n·  ignored (no wake word): {heard!r}", flush=True)
+            _log(f"IGNORED {heard!r}")
+    else:
+        print(f"\n🗣  HEARD: {heard!r}", flush=True)
+        _log(f"HEARD {heard!r}")
+
+
+async def _handle_tool_call(ws, ev: dict) -> None:
+    name = ev["name"]
+    call_id = ev["call_id"]
+    try:
+        args = json.loads(ev.get("arguments") or "{}")
+    except json.JSONDecodeError:
+        args = {}
+    lat = (time.monotonic() - _t_release) if _t_release else 0.0
+    arg_str = json.dumps(args, ensure_ascii=False)
+    if len(arg_str) > 70:
+        arg_str = arg_str[:67] + "…}"
+    print(f"\n⚙  {name}({arg_str})", flush=True)
+    _log(f"TOOL {name}({args}) latency={lat:.2f}s")
+    result = await dispatch_tool(name, args)
+    status = result.get("status", "?")
+    print(f"✓  {status}" if status == "ok" else f"✗  {status}", flush=True)
+    await ws.send(json.dumps({
+        "type": "conversation.item.create",
+        "item": {"type": "function_call_output", "call_id": call_id,
+                 "output": json.dumps(result)},
+    }))
+    await ws.send(_EVT_RESPONSE_CREATE)
+
+
 async def receive(ws):
     global _speaking, _listening
+    _NOISY = {"response.output_audio.delta", "response.output_audio_transcript.delta"}
     async for raw in ws:
         ev = json.loads(raw)
         t = ev.get("type", "")
-        if t not in ("response.output_audio.delta", "response.output_audio_transcript.delta"):
+        if t not in _NOISY:
             _log(t)
 
         if t == "response.created":
             _speaking = True
             if PTT:
-                _listening = False  # PTT: turn handed to the model until next Enter
-
+                _listening = False
         elif t == "response.output_audio.delta":
             _speaking = True
             play_q.put(base64.b64decode(ev["delta"]))
-
         elif t == "response.output_audio_transcript.delta":
             print(ev.get("delta", ""), end="", flush=True)
-
         elif t == "response.output_audio_transcript.done":
             print()
-
         elif t in ("response.done", "response.output_audio.done"):
             _speaking = False
             if PTT and t == "response.done":
                 print("\n— press ENTER to talk —", flush=True)
-
         elif t == "conversation.item.input_audio_transcription.completed":
-            heard = (ev.get("transcript") or "").strip()
-            if WAKE_MODE:
-                if is_wake(heard):
-                    print(f"\n🗣  HEARD (wake ✓): {heard!r}", flush=True)
-                    _log(f"WAKE {heard!r}")
-                    await ws.send(_EVT_RESPONSE_CREATE)
-                else:
-                    print(f"\n·  ignored (no wake word): {heard!r}", flush=True)
-                    _log(f"IGNORED {heard!r}")
-            else:
-                print(f"\n🗣  HEARD: {heard!r}", flush=True)
-                _log(f"HEARD {heard!r}")
-
+            await _handle_transcription(ws, ev)
         elif t == "input_audio_buffer.speech_started":
-            while not play_q.empty():
-                try:
-                    play_q.get_nowait()
-                except queue.Empty:
-                    break
-            _play_buf.clear()
-
+            _drain_play_queue()
         elif t == "response.function_call_arguments.done":
-            name = ev["name"]
-            call_id = ev["call_id"]
-            try:
-                args = json.loads(ev.get("arguments") or "{}")
-            except json.JSONDecodeError:
-                args = {}
-            lat = (time.monotonic() - _t_release) if _t_release else 0.0
-            # clean, legible output for screen recording: ⚙ name(args)  →  ✓ ok
-            arg_str = json.dumps(args, ensure_ascii=False)
-            if len(arg_str) > 70:
-                arg_str = arg_str[:67] + "…}"
-            print(f"\n⚙  {name}({arg_str})", flush=True)
-            _log(f"TOOL {name}({args}) latency={lat:.2f}s")
-            result = await dispatch_tool(name, args)
-            status = result.get("status", "?")
-            print(f"✓  {status}" if status == "ok" else f"✗  {status}", flush=True)
-            await ws.send(
-                json.dumps(
-                    {
-                        "type": "conversation.item.create",
-                        "item": {
-                            "type": "function_call_output",
-                            "call_id": call_id,
-                            "output": json.dumps(result),
-                        },
-                    }
-                )
-            )
-            await ws.send(_EVT_RESPONSE_CREATE)
-
+            await _handle_tool_call(ws, ev)
         elif t == "error":
             print("\n[realtime error]", json.dumps(ev.get("error", ev)), flush=True)
             _log("ERROR " + json.dumps(ev.get("error", ev)))
@@ -645,12 +640,8 @@ async def main():
             _speaking = False
             _listening = WAKE_MODE
             _primed = False
-            _play_buf.clear()
-            while not mic_q.empty():
-                try:
-                    mic_q.get_nowait()
-                except queue.Empty:
-                    break
+            _drain_play_queue()
+            _drain_mic_queue()
             print("\n↻ reconnecting…", flush=True)
             _log("RECONNECT")
             await asyncio.sleep(0.5)
