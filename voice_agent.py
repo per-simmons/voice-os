@@ -74,8 +74,13 @@ HUD_FILE = "/tmp/voiceos-hud.json"  # waveform overlay reads {active, level} fro
 
 VOICE = "marin"
 WAKE_WORD = "hey chat"
-# tolerate common mishears of "hey chat"
-_WAKE_RE = re.compile(r"^\s*(hey|hay|a|hi)\s+(chat|chad|chap|chats|chatt|chett|chet|jack)\b")
+_EVT_RESPONSE_CREATE = json.dumps({"type": "response.create"})
+# tolerate common Whisper mishears of "hey chat"
+_WAKE_RE = re.compile(
+    r"^\s*(hey|hay|hi|he|ay|ey|ok|okay|happy|a)\s+"
+    r"(chat|chats|chad|chap|chatt|chett|chet|jack|chent|shot)\b"
+    r"|^\s*(heychat|haychat|heychad|happychat)\b"
+)
 
 INSTRUCTIONS = (
     "You are the voice operating system for Pat's Mac. Pat speaks a command to "
@@ -339,11 +344,16 @@ def _write_hud(active: bool, level: float):
 
 def _frame_level(data: bytes) -> float:
     """Normalized RMS amplitude (0..1) of a PCM16 frame, for the waveform."""
-    a = array.array("h")
-    a.frombytes(data)
-    if not a:
+    if not data:
         return 0.0
-    rms = math.sqrt(sum(x * x for x in a) / len(a))
+    try:
+        import numpy as _np
+        a = _np.frombuffer(data, dtype=_np.int16).astype(_np.float32)
+        rms = float(_np.sqrt(_np.mean(a * a)))
+    except Exception:  # noqa: BLE001
+        a = array.array("h")
+        a.frombytes(data)
+        rms = math.sqrt(sum(x * x for x in a) / len(a)) if a else 0.0
     return min(1.0, rms / 8000.0)
 
 
@@ -431,7 +441,6 @@ def _start_hotkey_listener():
     RegisterEventHotKey API (safe: no event tap, not in the input path). It feeds
     'down'/'up' into key_events. We intentionally DO NOT use pynput here — its
     global listener installs a system-wide event tap that can freeze all input."""
-    return
 
 
 async def hotkey_console(ws):
@@ -469,7 +478,7 @@ async def hotkey_console(ws):
             _write_hud(False, 0.0)         # clear the waveform (mic_pump won't, it's now idle)
             _t_release = time.monotonic()
             await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
-            await ws.send(json.dumps({"type": "response.create"}))
+            await ws.send(_EVT_RESPONSE_CREATE)
             print("⏳ thinking…", flush=True)
 
 
@@ -507,7 +516,7 @@ async def receive(ws):
                 if is_wake(heard):
                     print(f"\n🗣  HEARD (wake ✓): {heard!r}", flush=True)
                     _log(f"WAKE {heard!r}")
-                    await ws.send(json.dumps({"type": "response.create"}))
+                    await ws.send(_EVT_RESPONSE_CREATE)
                 else:
                     print(f"\n·  ignored (no wake word): {heard!r}", flush=True)
                     _log(f"IGNORED {heard!r}")
@@ -537,7 +546,6 @@ async def receive(ws):
                 arg_str = arg_str[:67] + "…}"
             print(f"\n⚙  {name}({arg_str})", flush=True)
             _log(f"TOOL {name}({args}) latency={lat:.2f}s")
-            t_exec = time.monotonic()
             result = await dispatch_tool(name, args)
             status = result.get("status", "?")
             print(f"✓  {status}" if status == "ok" else f"✗  {status}", flush=True)
@@ -553,7 +561,7 @@ async def receive(ws):
                     }
                 )
             )
-            await ws.send(json.dumps({"type": "response.create"}))
+            await ws.send(_EVT_RESPONSE_CREATE)
 
         elif t == "error":
             print("\n[realtime error]", json.dumps(ev.get("error", ev)), flush=True)
@@ -591,7 +599,8 @@ async def main():
         print("  🎙  VOICE OS — PUSH-TO-TALK (press ENTER to talk)")
     print(f"  mic: {mic_name}   ·   brain: {MODEL}   ·   log: {EVENT_LOG}")
     print("=" * 60, flush=True)
-    _log(f"--- start ({'WAKE' if WAKE_MODE else 'HOTKEY' if HOTKEY_MODE else 'PTT'}) ---")
+    mode_label = "WAKE" if WAKE_MODE else ("HOTKEY" if HOTKEY_MODE else "PTT")
+    _log(f"--- start ({mode_label}) ---")
     if HOTKEY_MODE:
         _start_hotkey_listener()
 

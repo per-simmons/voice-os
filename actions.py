@@ -73,6 +73,82 @@ def _ad(args: list[str], timeout: int = 20) -> dict:
         return {"ok": False, "raw": (p.stdout or p.stderr)[:500]}
 
 
+def _ax_collect_text(node, acc: list) -> None:
+    """Recursively collect all string values from an accessibility-tree node."""
+    if isinstance(node, dict):
+        for k in ("name", "value", "title", "text"):
+            v = node.get(k)
+            if isinstance(v, str):
+                acc.append(v)
+        for v in node.values():
+            _ax_collect_text(v, acc)
+    elif isinstance(node, list):
+        for v in node:
+            _ax_collect_text(v, acc)
+
+
+def _ax_node_matches(
+    node: dict,
+    allowed_roles,
+    name_lower: str | None,
+    sub_lower: str | None,
+    needles: list[str] | None,
+) -> bool:
+    """Return True if node satisfies all provided match criteria."""
+    if allowed_roles and node.get("role") not in allowed_roles:
+        return False
+    if name_lower and (node.get("name") or "").strip().lower() != name_lower:
+        return False
+    if sub_lower or needles:
+        acc: list[str] = []
+        _ax_collect_text(node, acc)
+        flat = " ".join(acc).lower()
+        if sub_lower and sub_lower not in flat:
+            return False
+        if needles and not any(nd in flat for nd in needles):
+            return False
+    return True
+
+
+def _tree_find(
+    node,
+    *,
+    role: str | None = None,
+    roles: tuple | None = None,
+    name: str | None = None,
+    subtext: str | None = None,
+    needles: list[str] | None = None,
+) -> str | None:
+    """Generic accessibility-tree search. Returns the first matching ref_id.
+
+    Matching rules (all provided must hold):
+      role / roles  — element role (role is shorthand for roles=(role,))
+      name          — element's 'name' attribute == name (exact, case-insensitive)
+      subtext       — subtree text contains subtext (case-insensitive)
+      needles       — any needle string appears in combined name/title/value
+    """
+    if role:
+        allowed_roles: tuple | None = (role,)
+    elif roles:
+        allowed_roles = tuple(roles)
+    else:
+        allowed_roles = None
+    name_lower = name.lower() if name else None
+    sub_lower = subtext.lower() if subtext else None
+
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, dict):
+            ref = n.get("ref_id")
+            if ref and _ax_node_matches(n, allowed_roles, name_lower, sub_lower, needles):
+                return ref
+            stack.extend(n.values())
+        elif isinstance(n, list):
+            stack.extend(n)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # tools exposed to gpt-realtime-2
 # ---------------------------------------------------------------------------
@@ -249,65 +325,16 @@ def _claude_click_exact(name: str) -> bool:
     """Find + click a Claude element whose name == `name` exactly (full snapshot)."""
     data = _claude_snapshot()
     sid = data.get("snapshot_id")
-    target = name.lower()
-    found = {"ref": None}
-
-    def walk(n):
-        if found["ref"]:
-            return
-        if isinstance(n, dict):
-            if n.get("ref_id") and (n.get("name") or "").strip().lower() == target:
-                found["ref"] = n["ref_id"]
-                return
-            for v in n.values():
-                walk(v)
-        elif isinstance(n, list):
-            for v in n:
-                walk(v)
-
-    walk(data)
-    if found["ref"] and sid:
-        _ad(["click", found["ref"], "--snapshot", sid])
+    ref = _tree_find(data, name=name)
+    if ref and sid:
+        _ad(["click", ref, "--snapshot", sid])
         return True
     return False
 
 
 def _find_link_by_subtext(data: dict, needle: str):
-    """Find a Claude project card: a `link` whose SUBTREE text contains needle
-    (project cards have empty names; their title lives in a child statictext)."""
-    needle = needle.lower()
-    found = {"ref": None}
-
-    def subtext(n, acc):
-        if isinstance(n, dict):
-            for k in ("name", "value", "title", "text"):
-                v = n.get(k)
-                if isinstance(v, str):
-                    acc.append(v)
-            for v in n.values():
-                subtext(v, acc)
-        elif isinstance(n, list):
-            for v in n:
-                subtext(v, acc)
-
-    def walk(n):
-        if found["ref"]:
-            return
-        if isinstance(n, dict):
-            if n.get("role") == "link" and n.get("ref_id"):
-                acc = []
-                subtext(n, acc)
-                if any(needle in (t or "").lower() for t in acc):
-                    found["ref"] = n["ref_id"]
-                    return
-            for v in n.values():
-                walk(v)
-        elif isinstance(n, list):
-            for v in n:
-                walk(v)
-
-    walk(data)
-    return found["ref"]
+    """Find a Claude project card: a `link` whose SUBTREE text contains needle."""
+    return _tree_find(data, role="link", subtext=needle)
 
 
 def _claude_in_project(name: str) -> bool:
@@ -355,44 +382,16 @@ def _claude_focus_compose():
     """Click the compose textfield so keystrokes land in it."""
     data = _claude_snapshot()
     sid = data.get("snapshot_id")
-    found = {"ref": None}
-
-    def walk(n):
-        if found["ref"]:
-            return
-        if isinstance(n, dict):
-            if n.get("role") == "textfield" and n.get("ref_id"):
-                found["ref"] = n["ref_id"]
-                return
-            for v in n.values():
-                walk(v)
-        elif isinstance(n, list):
-            for v in n:
-                walk(v)
-
-    walk(data)
-    if found["ref"] and sid:
-        _ad(["click", found["ref"], "--snapshot", sid])
+    ref = _tree_find(data, role="textfield")
+    if ref and sid:
+        _ad(["click", ref, "--snapshot", sid])
         time.sleep(0.4)
 
 
 def _claude_all_text() -> list:
-    out = []
-
-    def walk(n):
-        if isinstance(n, dict):
-            if n.get("role") in ("statictext", "paragraph"):
-                v = (n.get("name") or n.get("value") or "").strip()
-                if v:
-                    out.append(v)
-            for v in n.values():
-                walk(v)
-        elif isinstance(n, list):
-            for v in n:
-                walk(v)
-
-    walk(_claude_snapshot())
-    return out
+    acc: list[str] = []
+    _ax_collect_text(_claude_snapshot(), acc)
+    return [t.strip() for t in acc if t.strip()]
 
 
 def _read_claude_response(timeout: float = 25.0) -> str:
@@ -457,7 +456,7 @@ def ask_claude(question: str = "",
     safe = q.replace("\\", "").replace('"', '\\"')
     _osa(f'tell application "System Events" to keystroke "{safe}"')
     time.sleep(0.4)
-    _osa("tell application \"System Events\" to key code 36")  # Return = send
+    _osa("tell application \"System Events\" to key code 36")
     _clog("sent; waiting for Claude's reply…")
     reply = _read_claude_response(timeout=22.0)
     _clog(f"ask_claude DONE in {time.monotonic()-_clog_t0[0]:.1f}s  in_project={in_project}")
@@ -470,41 +469,8 @@ def ask_claude(question: str = "",
 
 
 def _find_clickable_by_subtext(data, needle, roles=("cell", "row", "button", "link")):
-    """Find an element of `roles` whose SUBTREE text contains needle (the label
-    is often a child statictext with no ref of its own)."""
-    needle = needle.lower()
-    found = {"ref": None}
-
-    def subtext(n, acc):
-        if isinstance(n, dict):
-            for k in ("name", "value", "title", "text"):
-                v = n.get(k)
-                if isinstance(v, str):
-                    acc.append(v)
-            for v in n.values():
-                subtext(v, acc)
-        elif isinstance(n, list):
-            for v in n:
-                subtext(v, acc)
-
-    def walk(n):
-        if found["ref"]:
-            return
-        if isinstance(n, dict):
-            if n.get("role") in roles and n.get("ref_id"):
-                acc = []
-                subtext(n, acc)
-                if any(needle in (t or "").lower() for t in acc):
-                    found["ref"] = n["ref_id"]
-                    return
-            for v in n.values():
-                walk(v)
-        elif isinstance(n, list):
-            for v in n:
-                walk(v)
-
-    walk(data)
-    return found["ref"]
+    """Find an element of `roles` whose SUBTREE text contains needle."""
+    return _tree_find(data, roles=tuple(roles), subtext=needle)
 
 
 # ---- OBS control via its built-in WebSocket (reliable; not tree-dependent) ----
@@ -515,7 +481,8 @@ OBS_WS_CONFIG = os.path.expanduser(
 
 def _obs_password() -> str:
     try:
-        return json.load(open(OBS_WS_CONFIG)).get("server_password", "")
+        with open(OBS_WS_CONFIG) as f:
+            return json.load(f).get("server_password", "")
     except Exception:  # noqa: BLE001
         return ""
 
@@ -583,12 +550,14 @@ def obs_scene(name: str = "YouTube Talking Head") -> dict:
         return {"status": "error", "error": str(e)}
 
 
+_KEY_RAZOR = "cmd+k"  # Premiere: razor/add-edit at playhead
+
 # Premiere actions → key combos. Add a line to teach a new editing command.
 _PREMIERE_KEYS = {
     "pause": "space", "play": "space", "stop": "space", "space": "space",
     "left": "left", "back": "left", "frame_back": "left", "previous": "left",
     "right": "right", "forward": "right", "frame_forward": "right", "next": "right",
-    "cut": "cmd+k", "razor": "cmd+k", "add_edit": "cmd+k",   # razor at playhead
+    "cut": _KEY_RAZOR, "razor": _KEY_RAZOR, "add_edit": _KEY_RAZOR,
     "cut_all_tracks": "cmd+shift+k",
     "undo": "cmd+z", "redo": "cmd+shift+z", "save": "cmd+s",
     "mark_in": "i", "mark_out": "o", "add_marker": "m",
@@ -705,50 +674,18 @@ def stop_obs_recording() -> dict:
 # text extraction helpers for accessibility trees
 # ---------------------------------------------------------------------------
 def _extract_text(node) -> str:
-    out: list[str] = []
-
-    def walk(n):
-        if isinstance(n, dict):
-            for k in ("value", "name", "title", "text"):
-                v = n.get(k)
-                if isinstance(v, str) and v.strip():
-                    out.append(v.strip())
-            for v in n.values():
-                walk(v)
-        elif isinstance(n, list):
-            for v in n:
-                walk(v)
-
-    walk(node)
-    # de-dup consecutive repeats, join
+    acc: list[str] = []
+    _ax_collect_text(node, acc)
+    stripped = [s.strip() for s in acc if s.strip()]
     seen: list[str] = []
-    for s in out:
+    for s in stripped:
         if not seen or seen[-1] != s:
             seen.append(s)
     return "\n".join(seen)
 
 
 def _find_button(node, needles) -> str | None:
-    found = {"ref": None}
-
-    def walk(n):
-        if found["ref"]:
-            return
-        if isinstance(n, dict):
-            name = " ".join(
-                str(n.get(k, "")) for k in ("name", "title", "value")
-            ).lower()
-            if n.get("ref_id") and any(x in name for x in needles):
-                found["ref"] = n["ref_id"]
-                return
-            for v in n.values():
-                walk(v)
-        elif isinstance(n, list):
-            for v in n:
-                walk(v)
-
-    walk(node)
-    return found["ref"]
+    return _tree_find(node, needles=list(needles))
 
 
 WEB_BROWSER = "Arc"  # which browser web_search opens in
