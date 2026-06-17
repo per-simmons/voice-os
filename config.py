@@ -73,4 +73,21 @@ HUD_FILE: str = os.path.join(_tmp, "voiceos-hud.json")
 # ---------------------------------------------------------------------------
 # Browser / external tools
 # ---------------------------------------------------------------------------
-WEB_BROWSER: str = os.environ.get("VOICEOS_BROWSER", "Arc")
+# Default browser used by web_search (must be AppleScript-scriptable on macOS).
+WEB_BROWSER: str = os.environ.get("VOICEOS_BROWSER", "Safari")
+
+# ---------------------------------------------------------------------------
+# User / persona (keep personal values in .env, not in source)
+# ---------------------------------------------------------------------------
+# The user's name — used in the system prompt so the model addresses them correctly.
+USER_NAME: str = os.environ.get("VOICEOS_USER_NAME", "the user")
+
+# Free-text hints appended to the system prompt, e.g. accent, preferences.
+# Example: "The user has a New Zealand accent."
+USER_HINTS: str = os.environ.get("VOICEOS_USER_HINTS", "")
+
+# ---------------------------------------------------------------------------
+# App versions (override when you upgrade)
+# ---------------------------------------------------------------------------
+# Exact macOS app name for Adobe Premiere Pro (changes each year).
+PREMIERE_APP: str = os.environ.get("VOICEOS_PREMIERE_APP", "Adobe Premiere Pro")

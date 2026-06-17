@@ -73,35 +73,49 @@ HUD_FILE = config.HUD_FILE
 VOICE = config.VOICE
 WAKE_WORD = config.WAKE_WORD
 _EVT_RESPONSE_CREATE = json.dumps({"type": "response.create"})
-# tolerate common Whisper mishears of "hey chat"
+# Whisper mishears of "hey chat" — includes NZ-accent variants
+# ("chut", "chit", "jet", "jat", "ject" for "chat"; "a" / "eh" for "hey")
 _WAKE_RE = re.compile(
-    r"^\s*(hey|hay|hi|he|ay|ey|ok|okay|happy|a)\s+"
-    r"(chat|chats|chad|chap|chatt|chett|chet|jack|chent|shot)\b"
-    r"|^\s*(heychat|haychat|heychad|happychat)\b"
+    r"^\s*(hey|hay|hi|he|ay|ey|ok|okay|happy|a|eh|aye)\s+"
+    r"(chat|chats|chad|chap|chatt|chett|chet|jack|chent|shot"
+    r"|chit|chut|jet|jat|ject|chot|chart|chant|shat|char)\b"
+    r"|^\s*(heychat|haychat|heychad|happychat|achat|eychat)\b"
 )
 
-INSTRUCTIONS = (
-    "You are the voice operating system for Pat's Mac. Pat speaks a command to "
-    "control the computer. There is no wake word — just act on what he says. Call "
-    "exactly one matching tool, then give a short, natural spoken confirmation.\n"
-    "ROUTING RULES (follow exactly):\n"
-    "- To LAUNCH or open an app (including the Claude app): open_app. Just opening "
-    "the Claude app with no question = open_app('Claude').\n"
-    "- 'Open the YouTube Script project' (a Claude PROJECT, not an app): call "
-    "ask_claude with an EMPTY question — it just navigates into the project.\n"
-    "- If Pat wants Claude to WRITE, REWRITE, SUGGEST, or answer anything (e.g. "
-    "'ask Claude to rewrite the intro', 'have Claude suggest a script', 'open my "
-    "YouTube script project and ask Claude to rewrite the intro'): call ask_claude "
-    "with the request as the question. It opens the project and asks Claude itself. "
-    "NEVER answer on Claude's behalf, and never type a command in as the question.\n"
-    "- play music: play_music. control Premiere: premiere_control. read the screen: "
-    "read_screen_aloud. start recording: start_obs_recording. switch OBS scene: obs_scene.\n"
-    "- search the web / 'open the X docs' / look something up: web_search.\n"
-    "- 'click the first link' / 'open the first result' / 'click the second one': click_link.\n"
-    "- 'take a note: ...' / 'note that ...' / 'write this down': take_note.\n"
-    "Only call a tool when the command is clear; if it's just a fragment, ask Pat "
-    "to repeat it. 'Throw on / put on a song' means play_music. Keep replies brief."
-)
+def _build_instructions() -> str:
+    _name = config.USER_NAME
+    _browser = config.WEB_BROWSER
+    _hints = (" " + config.USER_HINTS.strip()) if config.USER_HINTS.strip() else ""
+    return (
+        f"You are the voice operating system for {_name}'s Mac.{_hints} "
+        f"{_name} speaks a command to control the computer. Call exactly one matching "
+        "tool, then give a SHORT spoken confirmation (one sentence max).\n"
+        "ROUTING RULES (follow exactly):\n"
+        "- To LAUNCH or focus any app by name: open_app. 'Open Chrome' or 'open Google "
+        "Chrome' = open_app('Google Chrome'). 'Open the Claude app' (no question) = "
+        "open_app('Claude').\n"
+        f"- To SEARCH THE WEB, check the weather, look something up, find docs, or open "
+        f"a URL: web_search. This opens {_browser} with Google. Do NOT use open_app for "
+        f"web searches. CRITICAL: after calling web_search, say 'Searching for X in {_browser}' "
+        "and STOP. You cannot read the browser result — do NOT call any tool again.\n"
+        "- 'click the first link' / 'open the top result' / 'click the second one': click_link.\n"
+        "- 'Open the YouTube Script project' (a Claude PROJECT, not an app): "
+        "ask_claude with an EMPTY question — it just navigates into the project.\n"
+        f"- If {_name} wants Claude to WRITE, REWRITE, SUGGEST, or answer anything: "
+        "ask_claude with the request as the question. It opens the project and asks "
+        "Claude itself. NEVER answer on Claude's behalf.\n"
+        "- play music: play_music. 'Throw on / put on a song' = play_music.\n"
+        "- control Premiere: premiere_control.\n"
+        "- read the screen: read_screen_aloud.\n"
+        "- start/stop recording: start_obs_recording / stop_obs_recording.\n"
+        "- switch OBS scene: obs_scene.\n"
+        "- 'take a note / note that / write this down': take_note.\n"
+        "Never call the same tool twice in a row. If a tool returns status ok, "
+        f"confirm and stop. If a command is unclear, ask {_name} to repeat it."
+    )
+
+
+INSTRUCTIONS = _build_instructions()
 
 TOOLS = [
     {
@@ -117,7 +131,7 @@ TOOLS = [
     {
         "type": "function",
         "name": "web_search",
-        "description": "Open the browser and search the web for a query. Use for 'search for X', 'look up X', 'google X', 'open the X docs', 'find the docs for X'.",
+        "description": "Open Arc browser and search Google for a query. Use for ANY web lookup: 'search for X', 'look up X', 'google X', 'what's the weather', 'find the docs for X', 'open X website'. After calling this tool, say what you searched and STOP — you cannot read the result.",
         "parameters": {
             "type": "object",
             "properties": {"query": {"type": "string"}},
@@ -236,7 +250,7 @@ def is_wake(transcript: str) -> bool:
 def session_config() -> dict:
     audio_in = {
         "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
-        "transcription": {"model": "whisper-1"},
+        "transcription": {"model": "whisper-1", "language": "en"},
     }
     if WAKE_MODE:
         # detect + transcribe turns, but DON'T auto-respond — we gate on the wake

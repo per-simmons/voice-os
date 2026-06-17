@@ -161,8 +161,8 @@ APP_ALIASES = {
     "claude": "Claude",
     "chrome": "Google Chrome",
     "google chrome": "Google Chrome",
-    "premiere": "Adobe Premiere Pro 2025",
-    "premiere pro": "Adobe Premiere Pro 2025",
+    "premiere": config.PREMIERE_APP,
+    "premiere pro": config.PREMIERE_APP,
     "obs studio": "OBS",
     "spotify app": "Spotify",
 }
@@ -693,12 +693,11 @@ WEB_BROWSER = config.WEB_BROWSER
 
 
 def web_search(query: str = "") -> dict:
-    """Search the web for `query` in a NEW TAB of the EXISTING Arc window (don't
-    spawn a new browser), then bring Arc to the front."""
+    """Search the web for `query` in a NEW TAB of the EXISTING browser window (don't
+    spawn a new window), then bring the browser to the front."""
     from urllib.parse import quote
 
     url = f"https://www.google.com/search?q={quote(query or '')}"
-    # open in the current Arc window as a new tab (reuses Pat's open window/space)
     script = (
         f'tell application "{WEB_BROWSER}" to tell front window '
         f'to make new tab with properties {{URL:"{url}"}}'
