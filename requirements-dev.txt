@@ -1,0 +1,3 @@
+# Dev/test deps. Install with: pip install -r requirements-dev.txt
+# (test_retrieval.py also needs sentence-transformers from the main env.)
+pytest>=8.0
