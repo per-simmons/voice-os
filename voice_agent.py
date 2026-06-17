@@ -380,14 +380,17 @@ async def mic_pump(ws):
         _write_hud(active, _frame_level(data) if active else 0.0)
         if not active:
             continue
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "input_audio_buffer.append",
-                    "audio": base64.b64encode(data).decode(),
-                }
+        try:
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "input_audio_buffer.append",
+                        "audio": base64.b64encode(data).decode(),
+                    }
+                )
             )
-        )
+        except websockets.ConnectionClosed:
+            return  # socket closed (shutdown / 60-min cap) — exit cleanly
 
 
 async def ptt_console(ws):

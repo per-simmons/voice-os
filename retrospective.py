@@ -145,7 +145,9 @@ def run_retrospective(
 
     import config
     log_str = _format_log_for_prompt(all_calls)
-    prompt = _RETROSPECTIVE_PROMPT.format(log=log_str)
+    # NB: plain .replace, not .format — the prompt contains literal { } in its
+    # JSON example, which str.format would try to parse as fields.
+    prompt = _RETROSPECTIVE_PROMPT.replace("{log}", log_str)
 
     try:
         import urllib.request
