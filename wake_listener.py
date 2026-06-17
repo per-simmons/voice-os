@@ -2,20 +2,22 @@
 """
 wake_listener.py — LOCAL wake word, $0 idle.
 
-The mic is processed entirely on your Mac: webrtcvad finds when you're speaking,
-faster-whisper (tiny.en) transcribes it locally — all FREE, no network. We only
-open a connection to OpenAI's gpt-realtime-2 AFTER we hear "hey chat", to run the
-command and speak the reply. So leaving this on all day costs nothing until you
-actually summon it (~1–2¢ per command).
+Two-stage pipeline:
+  1. OpenWakeWord runs a tiny neural net on every 80ms audio frame — sub-ms CPU,
+     no network, scores the wake phrase continuously.
+  2. When OWW fires, faster-whisper transcribes only the post-wake audio to extract
+     the command text.  Whisper never sees audio unless the wake word already fired.
 
 Pipeline:
-  mic ─▶ webrtcvad (local) ─▶ faster-whisper tiny.en (local) ─▶ "hey chat …"?
-        └ no  → ignored, $0                                       │ yes
-                                                                  ▼
-                          open gpt-realtime-2 ─▶ tool call ─▶ agent-desktop ─▶ speak
+  mic ─▶ OpenWakeWord (local, ~1ms/frame) ─▶ wake score > threshold?
+        └ no  → ignored, $0                    │ yes
+                                               ▼
+                faster-whisper base.en (local) ─▶ command text
+                                               ▼
+              open gpt-realtime-2 ─▶ tool call ─▶ agent-desktop ─▶ speak
 
 Run:  ./run.sh --local     (or)   python wake_listener.py [--mic Scarlett]
-Ctrl-C to quit. First run downloads the ~75MB tiny.en model once.
+Ctrl-C to quit. First run downloads models once (~75MB Whisper + ~5MB OWW).
 """
 from __future__ import annotations
 
@@ -24,7 +26,6 @@ import base64
 import json
 import os
 import queue
-import re
 import sys
 import threading
 import time
@@ -32,9 +33,10 @@ import time
 try:
     import numpy as np
     import sounddevice as sd
-    import webrtcvad
     import websockets
     from faster_whisper import WhisperModel
+    import openwakeword
+    from openwakeword.model import Model as OWWModel
 except ImportError as e:
     sys.exit(f"Missing dep ({e}). Run: ./run.sh --local  (installs local wake engine).")
 
@@ -59,45 +61,21 @@ def _arg_value(flag, default=None):
 MIC_NAME = _arg_value("--mic", os.environ.get("VOICEOS_MIC"))
 WHISPER_SIZE = os.environ.get("VOICEOS_WHISPER", "base.en")  # base = sturdier than tiny
 
-import difflib
-
-# tolerant local wake matcher. base/tiny whisper mangles the short phrase "hey
-# chat" badly ("happy chat", "he chat", "hey chad"...), so we (1) match a broad
-# explicit list anywhere in the utterance AND (2) fall back to fuzzy matching on
-# the first few word-pairs. Dedicated wake engines exist for exactly this reason;
-# this gets us reliable enough without Picovoice.
-_WAKE_PREFIX = r"(hey|hay|hi|he|ay|ey|ok|okay|happy|hi+|a)"
-_WAKE_NAME = r"(chat|chats|chad|chap|chatt|chett|chet|jack|chent|chap|shot)"
-_WAKE_RE = re.compile(rf"\b{_WAKE_PREFIX}\s+{_WAKE_NAME}\b")
-_WAKE_ONEWORD = re.compile(r"\b(heychat|haychat|heychad|happychat)\b")
-ARM_WINDOW = 6.0  # after a bare "hey chat", treat the next utterance as the command
-_armed_until = 0.0
-
-
-def _norm(text: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", text.lower())).strip()
-
-
-def _wake_split(text: str):
-    """Return the command after the wake word, or None if no wake word present.
-    '' means the wake word was heard with no command after it (-> arm)."""
-    norm = _norm(text)
-    m = _WAKE_RE.search(norm) or _WAKE_ONEWORD.search(norm)
-    if m:
-        return norm[m.end():].strip(" ,.-")
-    # fuzzy fallback: any of the first word-pairs close to "hey chat"
-    toks = norm.split()
-    for i in range(min(3, max(0, len(toks) - 1))):
-        pair = toks[i] + " " + toks[i + 1]
-        if difflib.SequenceMatcher(None, pair, "hey chat").ratio() >= 0.82:
-            return " ".join(toks[i + 2:]).strip(" ,.-")
-    return None
-
 CAP_RATE = 16000        # capture/whisper/vad rate
-FRAME_MS = 30
-FRAME = CAP_RATE * FRAME_MS // 1000          # 480 samples
+FRAME_MS = 80           # OWW wants multiples of 80ms
+FRAME = CAP_RATE * FRAME_MS // 1000          # 1280 samples
 SILENCE_TAIL_MS = 450                         # end utterance after this much silence
 MAX_UTTER_MS = 6000
+
+# OpenWakeWord model to use for wake detection.
+# Built-in options: "hey_jarvis", "hey_mycroft", "alexa"
+# Set VOICEOS_OWW_MODEL env var to override (e.g. path to a custom .tflite).
+OWW_MODEL = os.environ.get("VOICEOS_OWW_MODEL", "hey_jarvis")
+# Activation threshold: higher = fewer false positives, higher miss rate.
+OWW_THRESHOLD = float(os.environ.get("VOICEOS_OWW_THRESHOLD", "0.5"))
+# OWW requires 16kHz 16-bit mono in chunks that are multiples of 80 ms.
+OWW_FRAME_MS = 80
+OWW_FRAME = CAP_RATE * OWW_FRAME_MS // 1000  # 1280 samples
 OUT_RATE = 24000        # gpt-realtime-2 audio output
 OUT_BLOCK = 4800
 PRIME_BYTES = OUT_RATE * 2 * 300 // 1000
@@ -150,76 +128,90 @@ def _spk_cb(outdata, frames, t, status):
         _primed = False
 
 
-def recognizer_thread(model: WhisperModel):
-    """Local VAD + Whisper. Runs in a plain thread; pushes wake commands to cmd_q."""
-    vad = webrtcvad.Vad(3)  # most aggressive: cleaner speech/silence segmentation
+def _process_frame(
+    frame: bytes,
+    audio_f32,
+    whisper: WhisperModel,
+    oww: OWWModel,
+    state: dict,
+) -> None:
+    """Process one 80ms frame through OWW (listening) or energy-VAD (awake)."""
+    if _speaking:
+        state["cmd_buf"].clear()
+        state["awake"] = False
+        state["silence_ms"] = 0
+        state["pre_ring"].clear()
+        oww.reset()
+        return
+
+    scores = oww.predict(audio_f32)
+    best = max(scores.values()) if scores else 0.0
+
+    if not state["awake"]:
+        state["pre_ring"].append(frame)
+        if len(state["pre_ring"]) > state["pre_frames"]:
+            state["pre_ring"].pop(0)
+        if best >= OWW_THRESHOLD:
+            state["awake"] = True
+            state["silence_ms"] = 0
+            state["cmd_buf"].clear()
+            state["cmd_buf"].extend(b"".join(state["pre_ring"]))
+            print('\n🟢 wake word detected — say your command', flush=True)
+            _log(f"OWW score={best:.3f}")
+    else:
+        state["cmd_buf"].extend(frame)
+        energy = np.abs(audio_f32).mean()
+        if energy < 0.005:
+            state["silence_ms"] += OWW_FRAME_MS
+        else:
+            state["silence_ms"] = 0
+        if state["silence_ms"] >= SILENCE_TAIL_MS or len(state["cmd_buf"]) >= state["max_bytes"]:
+            _finalize(whisper, bytes(state["cmd_buf"]))
+            state["cmd_buf"].clear()
+            state["awake"] = False
+            state["silence_ms"] = 0
+            state["pre_ring"].clear()
+            oww.reset()
+
+
+def recognizer_thread(whisper: WhisperModel, oww: OWWModel):
+    """Two-stage wake pipeline:
+      Stage 1 — OWW scores every 80ms frame; fires when score > OWW_THRESHOLD.
+      Stage 2 — once fired, collect audio until silence, then Whisper extracts cmd.
+    """
     buf = bytearray()
-    voiced = bytearray()
-    in_speech = False
-    silence_ms = 0
-    max_bytes = MAX_UTTER_MS * CAP_RATE // 1000 * 2
+    state = {
+        "cmd_buf": bytearray(),
+        "awake": False,
+        "silence_ms": 0,
+        "max_bytes": MAX_UTTER_MS * CAP_RATE // 1000 * 2,
+        "pre_frames": 3,   # 3 × 80ms = 240ms pre-roll context
+        "pre_ring": [],
+    }
 
     while True:
         buf.extend(cap_q.get())
-        # process whole 30ms frames
-        while len(buf) >= FRAME * 2:
-            frame = bytes(buf[: FRAME * 2])
-            del buf[: FRAME * 2]
-            if _speaking:  # ignore everything while the model is talking
-                voiced.clear()
-                in_speech = False
-                silence_ms = 0
-                continue
-            speech = vad.is_speech(frame, CAP_RATE)
-            if speech:
-                if not in_speech:
-                    in_speech = True
-                    silence_ms = 0
-                voiced.extend(frame)
-                silence_ms = 0
-            elif in_speech:
-                voiced.extend(frame)
-                silence_ms += FRAME_MS
-                if silence_ms >= SILENCE_TAIL_MS or len(voiced) >= max_bytes:
-                    _finalize(model, bytes(voiced))
-                    voiced.clear()
-                    in_speech = False
-                    silence_ms = 0
+        while len(buf) >= OWW_FRAME * 2:
+            frame = bytes(buf[: OWW_FRAME * 2])
+            del buf[: OWW_FRAME * 2]
+            audio_f32 = np.frombuffer(frame, dtype=np.int16).astype(np.float32) / 32768.0
+            _process_frame(frame, audio_f32, whisper, oww, state)
 
 
 def _finalize(model: WhisperModel, pcm: bytes):
-    if len(pcm) < CAP_RATE:  # < ~0.03s? skip tiny blips (guard)
-        pass
+    """Transcribe post-wake audio with Whisper and push command to cmd_q."""
     audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-    if audio.size < CAP_RATE // 3:  # < ~0.33s -> too short to be a command
+    if audio.size < CAP_RATE // 4:  # < ~0.25s -> nothing useful was said
+        print('\n·  (no command heard after wake word)', flush=True)
         return
-    segments, _ = model.transcribe(audio, language="en", beam_size=1)
+    segments, _ = model.transcribe(audio, language="en", beam_size=5)
     text = " ".join(s.text for s in segments).strip()
     if not text:
+        print('\n·  (whisper returned empty after wake)', flush=True)
         return
-
-    global _armed_until
-    now = time.monotonic()
-    cmd = _wake_split(text)
-
-    if cmd is not None:  # wake word heard somewhere in the utterance
-        if cmd:  # "hey chat, open spotify" — wake + command together
-            print(f"\n🗣  WAKE ✓ → {cmd!r}", flush=True)
-            _log(f"WAKE {text!r} -> {cmd!r}")
-            cmd_q.put(cmd)
-            _armed_until = 0.0
-        else:    # just "hey chat" — arm for the next utterance
-            print('\n🟢 armed — say your command (e.g. "open Spotify")', flush=True)
-            _log(f"ARMED {text!r}")
-            _armed_until = now + ARM_WINDOW
-    elif now < _armed_until:  # the command after a bare "hey chat"
-        print(f"\n🗣  COMMAND (armed) → {text!r}", flush=True)
-        _log(f"ARMED-CMD {text!r}")
-        cmd_q.put(text)
-        _armed_until = 0.0
-    else:
-        print(f"\n·  ignored locally (no wake, $0): {text!r}", flush=True)
-        _log(f"LOCAL-IGNORED {text!r}")
+    print(f"\n🗣  COMMAND → {text!r}", flush=True)
+    _log(f"CMD {text!r}")
+    cmd_q.put(text)
 
 
 def session_config() -> dict:
@@ -318,18 +310,23 @@ async def main():
     headers = {"Authorization": f"Bearer {key}"}
     in_dev, mic_name = resolve_input_device()
 
-    print("loading local speech model… (first run downloads ~75MB)", flush=True)
-    model = WhisperModel(WHISPER_SIZE, device="cpu", compute_type="int8")
+    print("loading Whisper STT model… (first run downloads ~75MB)", flush=True)
+    whisper = WhisperModel(WHISPER_SIZE, device="cpu", compute_type="int8")
+
+    print(f"loading OpenWakeWord model ({OWW_MODEL!r})…", flush=True)
+    openwakeword.utils.download_models()
+    oww = OWWModel(wakeword_models=[OWW_MODEL], enable_speex_noise_suppression=False)
 
     print("=" * 62)
-    print('  🎙  VOICE OS — LOCAL WAKE WORD ($0 idle): say "hey chat, …"')
-    print(f"  mic: {mic_name}   ·   local STT: {WHISPER_SIZE}   ·   brain: {MODEL}")
-    print("  wake word runs FREE on your Mac; cloud is called only on a match.")
+    print('  🎙  VOICE OS — LOCAL WAKE WORD ($0 idle): say "hey jarvis, …"')
+    print(f"  mic: {mic_name}   ·   wake: {OWW_MODEL}   ·   STT: {WHISPER_SIZE}   ·   brain: {MODEL}")
+    print("  wake detection runs FREE on your Mac; cloud only called on a match.")
+    print(f"  OWW threshold: {OWW_THRESHOLD}  (tune via VOICEOS_OWW_THRESHOLD env var)")
     print("  Ctrl-C to quit.")
     print("=" * 62, flush=True)
-    _log("--- start (LOCAL WAKE) ---")
+    _log("--- start (OWW WAKE) ---")
 
-    threading.Thread(target=recognizer_thread, args=(model,), daemon=True).start()
+    threading.Thread(target=recognizer_thread, args=(whisper, oww), daemon=True).start()
 
     with sd.RawInputStream(
         samplerate=CAP_RATE, channels=1, dtype="int16",

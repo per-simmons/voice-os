@@ -2,3 +2,4 @@
 faster-whisper>=1.0.0
 webrtcvad-wheels>=2.0.10
 numpy>=1.24
+openwakeword>=0.6.0
