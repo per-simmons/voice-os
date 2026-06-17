@@ -45,6 +45,17 @@ except ImportError:
 import actions
 import config
 
+try:
+    import retrieval as _retrieval
+    from session_log import SessionLog
+    import retrospective as _retrospective
+    _MEMORY_ENABLED = True
+except ImportError:
+    _MEMORY_ENABLED = False
+
+_session: "SessionLog | None" = None
+_cap_index: "_retrieval.CapabilityIndex | None" = None
+
 def _arg_value(flag, default=None):
     if flag in sys.argv:
         i = sys.argv.index(flag)
@@ -501,19 +512,50 @@ async def hotkey_console(ws):
             print("⏳ thinking…", flush=True)
 
 
+async def _inject_capability_context(ws, transcript: str) -> None:
+    """Retrieve relevant capabilities and inject as a system context item
+    into the conversation before response.create fires."""
+    if not _MEMORY_ENABLED or _cap_index is None:
+        return
+    try:
+        results = _cap_index.search(transcript, top_k=3)
+        grounding = _cap_index.grounding(results)
+        context = _cap_index.format_context(results, grounding)
+        if not context:
+            return
+        await ws.send(json.dumps({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": context}],
+            },
+        }))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _handle_transcription(ws, ev: dict) -> None:
     heard = (ev.get("transcript") or "").strip()
+    if _session:
+        _session.heard(heard)
     if WAKE_MODE:
         if is_wake(heard):
             print(f"\n🗣  HEARD (wake ✓): {heard!r}", flush=True)
             _log(f"WAKE {heard!r}")
+            if _session:
+                _session.wake(heard)
+            await _inject_capability_context(ws, heard)
             await ws.send(_EVT_RESPONSE_CREATE)
         else:
             print(f"\n·  ignored (no wake word): {heard!r}", flush=True)
             _log(f"IGNORED {heard!r}")
+            if _session:
+                _session.ignored(heard)
     else:
         print(f"\n🗣  HEARD: {heard!r}", flush=True)
         _log(f"HEARD {heard!r}")
+        await _inject_capability_context(ws, heard)
 
 
 async def _handle_tool_call(ws, ev: dict) -> None:
@@ -523,15 +565,19 @@ async def _handle_tool_call(ws, ev: dict) -> None:
         args = json.loads(ev.get("arguments") or "{}")
     except json.JSONDecodeError:
         args = {}
-    lat = (time.monotonic() - _t_release) if _t_release else 0.0
+    t0 = time.monotonic()
+    lat = (t0 - _t_release) if _t_release else 0.0
     arg_str = json.dumps(args, ensure_ascii=False)
     if len(arg_str) > 70:
         arg_str = arg_str[:67] + "…}"
     print(f"\n⚙  {name}({arg_str})", flush=True)
     _log(f"TOOL {name}({args}) latency={lat:.2f}s")
     result = await dispatch_tool(name, args)
+    exec_time = time.monotonic() - t0
     status = result.get("status", "?")
     print(f"✓  {status}" if status == "ok" else f"✗  {status}", flush=True)
+    if _session:
+        _session.tool_call(name, args, result, exec_time)
     await ws.send(json.dumps({
         "type": "conversation.item.create",
         "item": {"type": "function_call_output", "call_id": call_id,
@@ -559,7 +605,10 @@ async def receive(ws):
         elif t == "response.output_audio_transcript.delta":
             print(ev.get("delta", ""), end="", flush=True)
         elif t == "response.output_audio_transcript.done":
+            spoken_text = ev.get("transcript", "").strip()
             print()
+            if _session and spoken_text:
+                _session.spoken(spoken_text)
         elif t in ("response.done", "response.output_audio.done"):
             _speaking = False
             if PTT and t == "response.done":
@@ -571,8 +620,11 @@ async def receive(ws):
         elif t == "response.function_call_arguments.done":
             await _handle_tool_call(ws, ev)
         elif t == "error":
-            print("\n[realtime error]", json.dumps(ev.get("error", ev)), flush=True)
-            _log("ERROR " + json.dumps(ev.get("error", ev)))
+            err = ev.get("error", ev)
+            print("\n[realtime error]", json.dumps(err), flush=True)
+            _log("ERROR " + json.dumps(err))
+            if _session:
+                _session.error(err)
 
 
 def _print_banner(mic_name: str) -> None:
@@ -611,6 +663,7 @@ def resolve_input_device():
 
 
 async def main():
+    global _session, _cap_index
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
         sys.exit("OPENAI_API_KEY not set. Export a valid Realtime-capable key first.")
@@ -619,6 +672,14 @@ async def main():
     _print_banner(mic_name)
     if HOTKEY_MODE:
         _start_hotkey_listener()
+
+    if _MEMORY_ENABLED:
+        _session = SessionLog(user=config.USER_NAME)
+        try:
+            _cap_index = _retrieval.get_index(verbose=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[memory] retrieval index unavailable: {e}", flush=True)
+            _cap_index = None
 
     global _speaking, _listening, _primed, _in_dev
     _in_dev = in_dev
@@ -674,6 +735,22 @@ async def main():
             out_stream.close()
         except Exception:  # noqa: BLE001
             pass
+        if _session:
+            _session.close()
+            # run the dreaming loop — reflect on this session and learn from it
+            print("\n💭 running retrospective…", flush=True)
+            loop = asyncio.get_event_loop()
+            try:
+                added = await loop.run_in_executor(
+                    None,
+                    lambda: _retrospective.run_retrospective(
+                        session_log_path=_session.path, verbose=True
+                    )
+                )
+                if added:
+                    print(f"💡 learned {added} new capability(s) this session", flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"[retrospective] failed: {e}", flush=True)
 
 
 if __name__ == "__main__":

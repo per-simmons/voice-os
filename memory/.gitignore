@@ -1,0 +1,9 @@
+# Personal capabilities learned by the retrospective — machine-local, not shared
+capabilities.user.json
+
+# Session logs contain your voice commands — keep private
+sessions/
+
+# Embedding cache (regenerated automatically)
+embeddings.npy
+embedding_ids.json

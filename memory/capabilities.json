@@ -1,0 +1,266 @@
+[
+  {
+    "id": "app-open",
+    "description": "Launch or focus any macOS application by name",
+    "examples": [
+      "open Spotify",
+      "launch Chrome",
+      "open the browser",
+      "switch to Premiere",
+      "bring up OBS",
+      "open Terminal",
+      "focus Finder",
+      "open Google Chrome"
+    ],
+    "primitive": "run_applescript",
+    "template": "tell application \"{app}\" to activate\ntell application \"System Events\" to open application \"{app}\""
+  },
+  {
+    "id": "spotify-play-search",
+    "description": "Search Spotify and start playing results",
+    "examples": [
+      "play some jazz",
+      "put on Tchaikovsky",
+      "throw on something chill",
+      "play music",
+      "search Spotify for lo-fi beats",
+      "play some background music",
+      "put on a song",
+      "play {query} on Spotify"
+    ],
+    "primitive": "run_applescript",
+    "template": "do shell script \"open 'spotify:search:{query}'\"\ntell application \"Spotify\" to play"
+  },
+  {
+    "id": "spotify-pause",
+    "description": "Pause or resume Spotify playback",
+    "examples": [
+      "pause the music",
+      "stop Spotify",
+      "pause",
+      "resume music",
+      "unpause",
+      "play pause"
+    ],
+    "primitive": "run_applescript",
+    "template": "tell application \"Spotify\" to playpause"
+  },
+  {
+    "id": "web-search",
+    "description": "Open the browser and search Google for a query",
+    "examples": [
+      "search for {query}",
+      "google {query}",
+      "look up {query}",
+      "what is {query}",
+      "find {query} online",
+      "check the weather",
+      "search the web for {query}",
+      "open the {query} docs"
+    ],
+    "primitive": "open_url",
+    "template": "https://www.google.com/search?q={query}"
+  },
+  {
+    "id": "premiere-cut",
+    "description": "Cut/razor at the playhead in Premiere Pro",
+    "examples": [
+      "cut here",
+      "razor at playhead",
+      "add edit",
+      "cut the clip",
+      "split here",
+      "make a cut"
+    ],
+    "primitive": "press_key",
+    "template": {"combo": "cmd+k", "app": "Adobe Premiere Pro"}
+  },
+  {
+    "id": "premiere-cut-all",
+    "description": "Cut all tracks at the playhead in Premiere Pro",
+    "examples": [
+      "cut all tracks",
+      "razor all tracks",
+      "cut everything here",
+      "split all tracks"
+    ],
+    "primitive": "press_key",
+    "template": {"combo": "cmd+shift+k", "app": "Adobe Premiere Pro"}
+  },
+  {
+    "id": "premiere-play-pause",
+    "description": "Toggle playback in Premiere Pro",
+    "examples": [
+      "play the timeline",
+      "pause Premiere",
+      "play pause in Premiere",
+      "stop playback",
+      "play from here"
+    ],
+    "primitive": "press_key",
+    "template": {"combo": "space", "app": "Adobe Premiere Pro"}
+  },
+  {
+    "id": "premiere-step-back",
+    "description": "Step the playhead back by frames in Premiere Pro",
+    "examples": [
+      "go back a frame",
+      "step back",
+      "one frame back",
+      "go back {count} frames",
+      "rewind a frame"
+    ],
+    "primitive": "press_key",
+    "template": {"combo": "left", "app": "Adobe Premiere Pro", "repeat": "{count}"}
+  },
+  {
+    "id": "premiere-step-forward",
+    "description": "Step the playhead forward by frames in Premiere Pro",
+    "examples": [
+      "go forward a frame",
+      "step forward",
+      "one frame forward",
+      "go forward {count} frames",
+      "next frame"
+    ],
+    "primitive": "press_key",
+    "template": {"combo": "right", "app": "Adobe Premiere Pro", "repeat": "{count}"}
+  },
+  {
+    "id": "premiere-undo",
+    "description": "Undo the last action in Premiere Pro",
+    "examples": [
+      "undo",
+      "undo that",
+      "go back",
+      "undo the last cut"
+    ],
+    "primitive": "press_key",
+    "template": {"combo": "cmd+z", "app": "Adobe Premiere Pro"}
+  },
+  {
+    "id": "premiere-save",
+    "description": "Save the Premiere Pro project",
+    "examples": [
+      "save the project",
+      "save Premiere",
+      "save my work"
+    ],
+    "primitive": "press_key",
+    "template": {"combo": "cmd+s", "app": "Adobe Premiere Pro"}
+  },
+  {
+    "id": "premiere-mark-in",
+    "description": "Set the in-point marker at the playhead in Premiere Pro",
+    "examples": [
+      "mark in",
+      "set in point",
+      "mark the in point here"
+    ],
+    "primitive": "press_key",
+    "template": {"combo": "i", "app": "Adobe Premiere Pro"}
+  },
+  {
+    "id": "premiere-mark-out",
+    "description": "Set the out-point marker at the playhead in Premiere Pro",
+    "examples": [
+      "mark out",
+      "set out point",
+      "mark the out point here"
+    ],
+    "primitive": "press_key",
+    "template": {"combo": "o", "app": "Adobe Premiere Pro"}
+  },
+  {
+    "id": "premiere-ripple-delete",
+    "description": "Ripple delete the selected clip or in/out range in Premiere Pro",
+    "examples": [
+      "ripple delete",
+      "delete and close gap",
+      "remove and close gap",
+      "ripple delete this"
+    ],
+    "primitive": "press_key",
+    "template": {"combo": "shift+delete", "app": "Adobe Premiere Pro"}
+  },
+  {
+    "id": "obs-start-recording",
+    "description": "Start recording in OBS",
+    "examples": [
+      "start recording",
+      "begin recording",
+      "start OBS",
+      "record now",
+      "hit record"
+    ],
+    "primitive": "obs_call",
+    "template": {"requestType": "StartRecord", "requestData": {}}
+  },
+  {
+    "id": "obs-stop-recording",
+    "description": "Stop recording in OBS",
+    "examples": [
+      "stop recording",
+      "end recording",
+      "stop OBS",
+      "finish recording"
+    ],
+    "primitive": "obs_call",
+    "template": {"requestType": "StopRecord", "requestData": {}}
+  },
+  {
+    "id": "obs-switch-scene",
+    "description": "Switch OBS to a named scene",
+    "examples": [
+      "switch to {scene}",
+      "change to {scene} scene",
+      "OBS switch to {scene}",
+      "show {scene}",
+      "go to talking head",
+      "switch to screen only"
+    ],
+    "primitive": "obs_call",
+    "template": {"requestType": "SetCurrentProgramScene", "requestData": {"sceneName": "{scene}"}}
+  },
+  {
+    "id": "read-screen",
+    "description": "Read the text currently visible on screen in an app",
+    "examples": [
+      "what does the screen say",
+      "read the screen",
+      "what's on screen",
+      "read what's in Terminal",
+      "what did Claude just say",
+      "read that back to me"
+    ],
+    "primitive": "read_screen",
+    "template": {"app": "{app}"}
+  },
+  {
+    "id": "take-note",
+    "description": "Save a note to Apple Notes",
+    "examples": [
+      "take a note",
+      "note that {text}",
+      "write this down",
+      "remember this",
+      "save a note saying {text}",
+      "add a note"
+    ],
+    "primitive": "run_applescript",
+    "template": "tell application \"Notes\"\n  activate\n  make new note with properties {body:\"{text}\"}\nend tell"
+  },
+  {
+    "id": "terminal-run",
+    "description": "Open Terminal and run a command or start a Claude Code session",
+    "examples": [
+      "open a terminal and run {command}",
+      "run {command} in terminal",
+      "start a Claude Code session",
+      "open terminal and ask Claude to {prompt}",
+      "run claude in terminal"
+    ],
+    "primitive": "run_applescript",
+    "template": "tell application \"Terminal\"\n  activate\n  do script \"{command}\"\nend tell"
+  }
+]

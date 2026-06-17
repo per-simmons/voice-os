@@ -3,3 +3,6 @@ faster-whisper>=1.0.0
 webrtcvad-wheels>=2.0.10
 numpy>=1.24
 openwakeword>=0.6.0
+
+# Local capability retrieval (semantic search, no API cost). Used by retrieval.py.
+sentence-transformers>=3.0.0
