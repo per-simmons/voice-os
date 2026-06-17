@@ -40,5 +40,12 @@ if [[ " $* " == *" --local "* ]]; then
   echo "→ launching LOCAL wake-word listener (\$0 idle)"
   exec python wake_listener.py "${@/--local/}"
 fi
-echo "→ launching voice agent"
+# Default to PUSH-TO-TALK: the mic stays OFF until you press ENTER — no always-on
+# cloud streaming. To override, pass your own mode flag (--hotkey <key>), or use
+# ./run.sh --local for the on-device wake word.
+case " $* " in
+  *" --push-to-talk "*|*" --hotkey "*) ;;          # explicit mode already chosen
+  *) set -- --push-to-talk "$@" ;;                 # otherwise force push-to-talk
+esac
+echo "→ launching voice agent (push-to-talk; press ENTER to talk)"
 exec python voice_agent.py "$@"
