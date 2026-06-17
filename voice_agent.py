@@ -95,34 +95,25 @@ _WAKE_RE = re.compile(
 
 def _build_instructions() -> str:
     _name = config.USER_NAME
-    _browser = config.WEB_BROWSER
     _hints = (" " + config.USER_HINTS.strip()) if config.USER_HINTS.strip() else ""
+    _browser = config.WEB_BROWSER
     return (
-        f"You are the voice operating system for {_name}'s Mac.{_hints} "
-        f"{_name} speaks a command to control the computer. Call exactly one matching "
-        "tool, then give a SHORT spoken confirmation (one sentence max).\n"
-        "ROUTING RULES (follow exactly):\n"
-        "- To LAUNCH or focus any app by name: open_app. 'Open Chrome' or 'open Google "
-        "Chrome' = open_app('Google Chrome'). 'Open the Claude app' (no question) = "
-        "open_app('Claude').\n"
-        f"- To SEARCH THE WEB, check the weather, look something up, find docs, or open "
-        f"a URL: web_search. This opens {_browser} with Google. Do NOT use open_app for "
-        f"web searches. CRITICAL: after calling web_search, say 'Searching for X in {_browser}' "
-        "and STOP. You cannot read the browser result — do NOT call any tool again.\n"
-        "- 'click the first link' / 'open the top result' / 'click the second one': click_link.\n"
-        "- 'Open the YouTube Script project' (a Claude PROJECT, not an app): "
-        "ask_claude with an EMPTY question — it just navigates into the project.\n"
-        f"- If {_name} wants Claude to WRITE, REWRITE, SUGGEST, or answer anything: "
-        "ask_claude with the request as the question. It opens the project and asks "
-        "Claude itself. NEVER answer on Claude's behalf.\n"
-        "- play music: play_music. 'Throw on / put on a song' = play_music.\n"
-        "- control Premiere: premiere_control.\n"
-        "- read the screen: read_screen_aloud.\n"
-        "- start/stop recording: start_obs_recording / stop_obs_recording.\n"
-        "- switch OBS scene: obs_scene.\n"
-        "- 'take a note / note that / write this down': take_note.\n"
-        "Never call the same tool twice in a row. If a tool returns status ok, "
-        f"confirm and stop. If a command is unclear, ask {_name} to repeat it."
+        f"You are the voice operating system for {_name}'s Mac.{_hints}\n"
+        f"{_name} speaks a command and you execute it using the tools below.\n\n"
+        "TOOLS:\n"
+        "  run_applescript(script)              - run any AppleScript\n"
+        "  press_key(combo, app, repeat?)       - send a key to an app\n"
+        "  read_screen(app?)                    - read visible text from an app\n"
+        f"  open_url(url)                        - open a URL in {_browser}\n"
+        "  obs_call(request_type, request_data) - control OBS via WebSocket\n\n"
+        "CONTEXT: Before each response you receive RETRIEVED CAPABILITIES showing\n"
+        "the most relevant known recipes for the command. Use them as your template.\n\n"
+        "RULES:\n"
+        "- STRONG grounding: execute immediately using the retrieved template.\n"
+        "- WEAK grounding: ask for clarification rather than guessing.\n"
+        "- After a tool returns status ok, give ONE short spoken confirmation and stop.\n"
+        "- Never call the same tool twice in a row.\n"
+        f"- If a command is genuinely unclear, ask {_name} to repeat it."
     )
 
 
@@ -131,122 +122,59 @@ INSTRUCTIONS = _build_instructions()
 TOOLS = [
     {
         "type": "function",
-        "name": "open_app",
-        "description": "Launch or focus a macOS app by name (e.g. Spotify, OBS, Google Chrome, Premiere Pro).",
+        "name": "run_applescript",
+        "description": "Execute AppleScript on the Mac. Use for launching/focusing apps, controlling Spotify, Notes, Terminal, Finder, System Events, or any app with a scripting dictionary.",
         "parameters": {
             "type": "object",
-            "properties": {"name": {"type": "string"}},
-            "required": ["name"],
+            "properties": {"script": {"type": "string", "description": "The full AppleScript to run"}},
+            "required": ["script"],
         },
     },
     {
         "type": "function",
-        "name": "web_search",
-        "description": "Open Arc browser and search Google for a query. Use for ANY web lookup: 'search for X', 'look up X', 'google X', 'what's the weather', 'find the docs for X', 'open X website'. After calling this tool, say what you searched and STOP — you cannot read the result.",
-        "parameters": {
-            "type": "object",
-            "properties": {"query": {"type": "string"}},
-            "required": ["query"],
-        },
-    },
-    {
-        "type": "function",
-        "name": "click_link",
-        "description": "Click a search result in the browser — e.g. 'click the first link', 'open the first result', 'click the second one'. Opens the Nth organic result (below the AI overview).",
-        "parameters": {
-            "type": "object",
-            "properties": {"position": {"type": "string", "description": "first / second / third (default first)"}},
-            "required": [],
-        },
-    },
-    {
-        "type": "function",
-        "name": "take_note",
-        "description": "Save a note in Apple Notes. Use for 'take a note: ...', 'note that ...', 'remind me ...', 'write this down: ...'. The text after the phrase is the note.",
-        "parameters": {
-            "type": "object",
-            "properties": {"text": {"type": "string", "description": "the note content"}},
-            "required": ["text"],
-        },
-    },
-    {
-        "type": "function",
-        "name": "play_music",
-        "description": "Open Spotify and play music. Pass a search query like 'Tchaikovsky', or empty to resume.",
-        "parameters": {
-            "type": "object",
-            "properties": {"query": {"type": "string"}},
-            "required": [],
-        },
-    },
-    {
-        "type": "function",
-        "name": "run_terminal",
-        "description": "Open Terminal and start a Claude Code session with the given prompt.",
-        "parameters": {
-            "type": "object",
-            "properties": {"prompt": {"type": "string"}},
-            "required": ["prompt"],
-        },
-    },
-    {
-        "type": "function",
-        "name": "read_screen_aloud",
-        "description": "Read back the text currently visible in an app (default Terminal).",
-        "parameters": {
-            "type": "object",
-            "properties": {"app": {"type": "string"}},
-            "required": [],
-        },
-    },
-    {
-        "type": "function",
-        "name": "start_obs_recording",
-        "description": "Open OBS and start recording.",
-        "parameters": {"type": "object", "properties": {}, "required": []},
-    },
-    {
-        "type": "function",
-        "name": "stop_obs_recording",
-        "description": "Stop the OBS recording.",
-        "parameters": {"type": "object", "properties": {}, "required": []},
-    },
-    {
-        "type": "function",
-        "name": "obs_scene",
-        "description": "Switch OBS to a scene by name (e.g. 'YouTube Talking Head', 'Screen Only'). Use for 'switch to my talking head scene', 'change the scene to X'.",
-        "parameters": {
-            "type": "object",
-            "properties": {"name": {"type": "string", "description": "scene name (fuzzy matched)"}},
-            "required": ["name"],
-        },
-    },
-    {
-        "type": "function",
-        "name": "ask_claude",
-        "description": "Ask Claude (in Claude Desktop's YouTube Script project) to write/rewrite/suggest something and get its reply. This tool OPENS that project itself, then asks. Use it whenever the request includes asking Claude to write/rewrite/suggest/answer — INCLUDING 'open my YouTube script project and ask Claude to rewrite the intro', 'ask Claude to rewrite the intro', 'have Claude suggest a script'. The signal is a question/request FOR Claude to produce something. Do NOT use it merely to launch the Claude app when there is no question (that is open_app('Claude')). Don't answer on Claude's behalf; the returned 'response' is Claude's actual reply — read it back VERBATIM when Pat asks what Claude said.",
-        "parameters": {
-            "type": "object",
-            "properties": {"question": {"type": "string", "description": "what to ask Claude (e.g. 'we need a rewrite for this script, can you suggest any')"}},
-            "required": [],
-        },
-    },
-    {
-        "type": "function",
-        "name": "premiere_control",
-        "description": "Control Premiere Pro. Transport: 'pause'/'play'/'stop' toggle playback; 'left'/'right' step the playhead by frames (for 'go back 2 frames' use action='left', count=2). Editing: 'cut' (razor/add-edit at the playhead), 'cut_all_tracks', 'undo', 'redo', 'save', 'mark_in', 'mark_out', 'add_marker', 'ripple_delete', 'delete', 'zoom_in', 'zoom_out'. Default count is 1.",
+        "name": "press_key",
+        "description": "Send a keyboard shortcut to a running macOS app. Use for Premiere Pro editing, or any app that responds to hotkeys.",
         "parameters": {
             "type": "object",
             "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["pause", "play", "stop", "left", "right", "cut", "cut_all_tracks",
-                             "undo", "redo", "save", "mark_in", "mark_out", "add_marker",
-                             "ripple_delete", "delete", "zoom_in", "zoom_out"],
-                },
-                "count": {"type": "integer", "description": "number of frames to step for left/right (default 1)"},
+                "combo": {"type": "string", "description": "Key combo e.g. 'space', 'cmd+k', 'cmd+shift+z', 'left'"},
+                "app": {"type": "string", "description": "App name substring e.g. 'Premiere', 'Final Cut'"},
+                "repeat": {"type": "integer", "description": "How many times to press (default 1)"},
             },
+            "required": ["combo", "app"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "read_screen",
+        "description": "Read the text currently visible in a macOS app via the accessibility tree. Use for 'what does the screen say', 'read that back', 'what did Claude say'.",
+        "parameters": {
+            "type": "object",
+            "properties": {"app": {"type": "string", "description": "App name to read from (default: Terminal)"}},
             "required": [],
+        },
+    },
+    {
+        "type": "function",
+        "name": "open_url",
+        "description": "Open a URL in the browser. For web searches use https://www.google.com/search?q=<url-encoded-query>. Also works for spotify: and other URL schemes.",
+        "parameters": {
+            "type": "object",
+            "properties": {"url": {"type": "string", "description": "Full URL to open"}},
+            "required": ["url"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "obs_call",
+        "description": "Control OBS via its WebSocket API. request_type examples: StartRecord, StopRecord, SetCurrentProgramScene (with request_data {sceneName: '...'}), GetSceneList.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "request_type": {"type": "string", "description": "OBS WebSocket request type"},
+                "request_data": {"type": "object", "description": "Optional request payload"},
+            },
+            "required": ["request_type"],
         },
     },
 ]
