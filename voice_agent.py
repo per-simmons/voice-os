@@ -78,7 +78,7 @@ WAKE_WORD = "hey chat"
 _WAKE_RE = re.compile(r"^\s*(hey|hay|a|hi)\s+(chat|chad|chap|chats|chatt|chett|chet|jack)\b")
 
 INSTRUCTIONS = (
-    "You are the voice operating system for Pat's Mac. Pat speaks a command to "
+    "You are the voice operating system for Nathan's Mac. Nathan speaks a command to "
     "control the computer. There is no wake word — just act on what he says. Call "
     "exactly one matching tool, then give a short, natural spoken confirmation.\n"
     "ROUTING RULES (follow exactly):\n"
@@ -86,7 +86,7 @@ INSTRUCTIONS = (
     "the Claude app with no question = open_app('Claude').\n"
     "- 'Open the YouTube Script project' (a Claude PROJECT, not an app): call "
     "ask_claude with an EMPTY question — it just navigates into the project.\n"
-    "- If Pat wants Claude to WRITE, REWRITE, SUGGEST, or answer anything (e.g. "
+    "- If Nathan wants Claude to WRITE, REWRITE, SUGGEST, or answer anything (e.g. "
     "'ask Claude to rewrite the intro', 'have Claude suggest a script', 'open my "
     "YouTube script project and ask Claude to rewrite the intro'): call ask_claude "
     "with the request as the question. It opens the project and asks Claude itself. "
@@ -96,7 +96,7 @@ INSTRUCTIONS = (
     "- search the web / 'open the X docs' / look something up: web_search.\n"
     "- 'click the first link' / 'open the first result' / 'click the second one': click_link.\n"
     "- 'take a note: ...' / 'note that ...' / 'write this down': take_note.\n"
-    "Only call a tool when the command is clear; if it's just a fragment, ask Pat "
+    "Only call a tool when the command is clear; if it's just a fragment, ask Nathan "
     "to repeat it. 'Throw on / put on a song' means play_music. Keep replies brief."
 )
 
@@ -196,7 +196,7 @@ TOOLS = [
     {
         "type": "function",
         "name": "ask_claude",
-        "description": "Ask Claude (in Claude Desktop's YouTube Script project) to write/rewrite/suggest something and get its reply. This tool OPENS that project itself, then asks. Use it whenever the request includes asking Claude to write/rewrite/suggest/answer — INCLUDING 'open my YouTube script project and ask Claude to rewrite the intro', 'ask Claude to rewrite the intro', 'have Claude suggest a script'. The signal is a question/request FOR Claude to produce something. Do NOT use it merely to launch the Claude app when there is no question (that is open_app('Claude')). Don't answer on Claude's behalf; the returned 'response' is Claude's actual reply — read it back VERBATIM when Pat asks what Claude said.",
+        "description": "Ask Claude (in Claude Desktop's YouTube Script project) to write/rewrite/suggest something and get its reply. This tool OPENS that project itself, then asks. Use it whenever the request includes asking Claude to write/rewrite/suggest/answer — INCLUDING 'open my YouTube script project and ask Claude to rewrite the intro', 'ask Claude to rewrite the intro', 'have Claude suggest a script'. The signal is a question/request FOR Claude to produce something. Do NOT use it merely to launch the Claude app when there is no question (that is open_app('Claude')). Don't answer on Claude's behalf; the returned 'response' is Claude's actual reply — read it back VERBATIM when Nathan asks what Claude said.",
         "parameters": {
             "type": "object",
             "properties": {"question": {"type": "string", "description": "what to ask Claude (e.g. 'we need a rewrite for this script, can you suggest any')"}},
@@ -399,21 +399,29 @@ async def mic_pump(ws):
         # and in PTT mode only after Enter.
         if not _listening or _speaking or _play_buf:
             continue
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "input_audio_buffer.append",
-                    "audio": base64.b64encode(data).decode(),
-                }
+        try:
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "input_audio_buffer.append",
+                        "audio": base64.b64encode(data).decode(),
+                    }
+                )
             )
-        )
+        except websockets.exceptions.ConnectionClosed:
+            break
 
 
 async def ptt_console(ws):
     global _listening
     loop = asyncio.get_event_loop()
     while True:
-        await loop.run_in_executor(None, sys.stdin.readline)
+        line = await loop.run_in_executor(None, sys.stdin.readline)
+        if line == "":
+            # Avoid a tight loop when launched without an interactive stdin
+            # (for example, smoke tests or process supervisors).
+            await asyncio.sleep(0.25)
+            continue
         if _speaking or _play_buf:
             continue
         await ws.send(json.dumps({"type": "input_audio_buffer.clear"}))
