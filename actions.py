@@ -760,7 +760,7 @@ def web_search(query: str = "") -> dict:
     from urllib.parse import quote
 
     url = f"https://www.google.com/search?q={quote(query or '')}"
-    # open in the current Arc window as a new tab (reuses Pat's open window/space)
+    # open in the current Arc window as a new tab (reuses Nathan's open window/space)
     script = (
         f'tell application "{WEB_BROWSER}" to tell front window '
         f'to make new tab with properties {{URL:"{url}"}}'

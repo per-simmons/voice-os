@@ -40,5 +40,8 @@ if [[ " $* " == *" --local "* ]]; then
   echo "→ launching LOCAL wake-word listener (\$0 idle)"
   exec python wake_listener.py "${@/--local/}"
 fi
+if [[ " $* " != *" --push-to-talk "* && " $* " != *" --hotkey "* ]]; then
+  set -- --push-to-talk "$@"
+fi
 echo "→ launching voice agent"
 exec python voice_agent.py "$@"
