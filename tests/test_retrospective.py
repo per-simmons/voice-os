@@ -136,6 +136,20 @@ def test_collect_turns_tolerates_corrupt_session_file(tmp_path):
     assert turns == []
 
 
+def test_collect_turns_recovers_valid_turn_around_corrupt_line(tmp_path):
+    # a corrupt line in the middle must not drop the valid command that follows
+    log = tmp_path / "mixed.jsonl"
+    log.write_text(
+        json.dumps({"event": "wake", "transcript": "hey chat, open spotify"}) + "\n"
+        "GARBAGE LINE\n"
+        + json.dumps({"event": "tool_call", "name": "run_applescript",
+                      "args": {}, "result": {"status": "ok"}, "ok": True}) + "\n"
+    )
+    turns = r._collect_turns([log])
+    assert len(turns) == 1
+    assert turns[0]["query"] == "open spotify"
+
+
 def test_collect_turns_tool_without_preceding_query_has_none_query(tmp_path):
     log = tmp_path / "session.jsonl"
     events = [

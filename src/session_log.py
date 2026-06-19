@@ -103,15 +103,25 @@ class SessionLog:
 
     @classmethod
     def read_session(cls, path: Path) -> list[dict]:
+        """Read a JSONL session, skipping individual malformed lines.
+
+        A single torn or corrupt line (e.g. a write interrupted by Ctrl-C)
+        must not discard the valid events around it, so JSON errors are
+        caught per line rather than for the whole file."""
         events = []
         try:
-            with open(path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        events.append(json.loads(line))
-        except Exception:  # noqa: BLE001
-            pass
+            f = open(path)
+        except OSError:
+            return events
+        with f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    events.append(json.loads(line))
+                except (ValueError, json.JSONDecodeError):
+                    continue
         return events
 
     @classmethod

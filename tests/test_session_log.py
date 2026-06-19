@@ -131,8 +131,8 @@ def test_error_writes_correct_event(slog):
 def test_reconnect_writes_correct_event(slog):
     slog.reconnect()
     events = SessionLog.read_session(slog.path)
-    ev = next(e for e in events if e.get("event") == "reconnect")
-    assert ev is not None
+    reconnects = [e for e in events if e.get("event") == "reconnect"]
+    assert len(reconnects) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -205,12 +205,24 @@ def test_read_session_skips_blank_lines(tmp_path):
     assert len(events) == 2
 
 
-def test_read_session_tolerates_first_line_corrupt(tmp_path):
+def test_read_session_skips_corrupt_line_but_keeps_valid_ones(tmp_path):
+    # a single bad line must not discard the valid events around it
+    f = tmp_path / "corrupt.jsonl"
+    f.write_text(
+        json.dumps({"event": "heard", "transcript": "before"}) + "\n"
+        "NOT JSON AT ALL\n"
+        + json.dumps({"event": "heard", "transcript": "after"}) + "\n"
+    )
+    events = SessionLog.read_session(f)
+    assert [e["transcript"] for e in events] == ["before", "after"]
+
+
+def test_read_session_recovers_from_leading_corrupt_line(tmp_path):
     f = tmp_path / "corrupt.jsonl"
     f.write_text("NOT JSON\n" + json.dumps({"event": "heard"}) + "\n")
-    # corrupt first line stops processing; result has 0 events (existing behavior)
     events = SessionLog.read_session(f)
-    assert isinstance(events, list)
+    assert len(events) == 1
+    assert events[0]["event"] == "heard"
 
 
 # ---------------------------------------------------------------------------
